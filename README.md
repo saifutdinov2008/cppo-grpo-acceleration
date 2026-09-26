@@ -316,6 +316,33 @@ Every CPPO step logs:
 `retained_signal_fraction` is the key number: it quantifies *how little* is
 actually thrown away, and is the mechanism behind CPPO's accuracy preservation.
 
+### 5.6 Accelerating the rollout stage
+
+The task asks for acceleration of **both** stages. CPPO addresses the update
+stage only — advantages do not exist until sampling has finished, so no
+completion-pruning method can shrink the rollout. The three costs named in the
+problem statement map onto the pipeline like this:
+
+| Cost named in the task | What this pipeline does | Where |
+|---|---|---|
+| Simultaneous storage of multiple LLMs in GPU memory | `beta = 0` removes the reference model entirely — no second set of weights, no reference forward pass. vLLM **sleep mode** releases the sampler's KV cache and weights between rollouts, so the sampler and the optimiser never hold memory at the same time. Optional LoRA (`use_peft`) drops optimiser state from 0.6B parameters to the adapter's. | `configs/base.yaml`, `cppo/train.py` |
+| Slow autoregressive rollout requiring group sampling | vLLM with PagedAttention and continuous batching, in **colocate** mode so the sampler shares the training process instead of needing a second GPU. CPPO's dynamic allocation enlarges the generation batch by `m = G // k`, which raises sampler occupancy at no extra cost per question. | `use_vllm`, `vllm_mode`, `geometry.py` |
+| Backpropagation updates | **CPPO**: back-propagate through `k` of `G` completions, chosen by `\|A_i\|`. Plus gradient checkpointing and bf16. | `cppo/pruning.py`, `cppo/trainer.py` |
+
+Two of these are worth stating plainly because they are easy to miss:
+
+- **`beta = 0` is a memory optimisation, not just a modelling choice.** It is
+  the single largest memory saving in the pipeline — a whole model removed —
+  and it is what makes pruning-before-every-forward-pass exact (§5.3).
+- **Dynamic allocation helps the rollout too.** It is usually described as an
+  update-stage trick, but enlarging the generation batch by `m` gives vLLM more
+  sequences to batch per step, which is exactly what its continuous batching
+  needs to reach high throughput.
+
+What this pipeline does **not** do is reduce the number of tokens generated.
+That is the remaining lever, and §7.1 explains why it is the one that now
+matters most.
+
 ---
 
 ## 6. Experimental setup
@@ -383,9 +410,10 @@ This one equation explains the whole spread of published numbers:
   terms.
 - **The rollout is not reducible by this method, even in principle.** Nothing
   in the rollout depends on advantages — they do not exist until sampling has
-  finished. Cutting rollout cost needs an orthogonal technique (speculative or
-  truncated sampling, early termination of degenerate groups, cross-step
-  completion reuse).
+  finished. The rollout is instead accelerated by vLLM, sleep mode and the
+  enlarged generation batch (§5.6); cutting it *further* needs an orthogonal
+  technique that reduces tokens generated — speculative or truncated sampling,
+  early termination of degenerate groups, or cross-step completion reuse.
 
 ![End-to-end speedup ceiling as a function of the update stage share](report/figures/amdahl_ceiling.png)
 
@@ -642,10 +670,19 @@ Any field can be overridden on the command line:
 python -m cppo.train --config configs/cppo_p75.yaml --max-samples 512 --seed 7
 ```
 
-Building the PDF report:
+The LaTeX report lives in [`report/report.tex`](report/report.tex); the built
+PDF is checked in at [`report/report.pdf`](report/report.pdf). Rebuild it with:
 
 ```bash
 cd report && make        # latexmk; `make pdflatex` for a manual cycle
+```
+
+Figures are regenerated from the measured JSON so they cannot drift from the
+text:
+
+```bash
+python benchmarks/plot_results.py \
+  --benchmark results/update_stage_mps_qwen3_0.6b.json --outdir report/figures
 ```
 
 ---

@@ -22,14 +22,24 @@ max_samples: 8192
 max_prompt_length: 640
 max_completion_length: 1024
 
-# Rollout: G = 8 completions per question, sampled with vLLM in the training
-# process (colocate mode) so that generation and optimisation share the GPU.
+# Rollout-stage acceleration. This is the half of the task CPPO does not
+# address: CPPO prunes the update stage, while the rollout is accelerated by
+#   * vLLM with PagedAttention and continuous batching, in colocate mode so
+#     the sampler shares the training process rather than needing a second
+#     GPU (kwon2023vllm);
+#   * sleep mode, which releases the vLLM KV cache and weights between
+#     rollouts so the sampler and the optimiser never hold memory at once;
+#   * CPPO's own dynamic completion allocation, which enlarges the generation
+#     batch by m = G // k and so raises sampler occupancy for free.
 num_generations: 8
 temperature: 1.0
 top_p: 1.0
 use_vllm: true
 vllm_mode: colocate
 vllm_gpu_memory_utilization: 0.3
+vllm_tensor_parallel_size: 1
+vllm_enable_sleep_mode: true
+# G = 8 completions per question.
 # CPPO can only prune *before* every forward pass if no forward pass precedes
 # the advantage computation. Turning the importance-sampling correction off
 # removes TRL's extra old-policy forward; see cppo/trainer.py for the details.

@@ -21,4 +21,3 @@ report/*.fls
 report/*.synctex.gz
 .DS_Store
 results/*.json.tmp
-report/report.pdf

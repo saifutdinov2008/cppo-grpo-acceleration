@@ -72,6 +72,10 @@ class RunSettings:  # pylint: disable=too-many-instance-attributes
     use_vllm: bool = False
     vllm_mode: str = "colocate"
     vllm_gpu_memory_utilization: float = 0.3
+    vllm_tensor_parallel_size: int = 1
+    # Frees the vLLM KV cache and weights between rollouts, so the sampler and
+    # the trainer do not hold GPU memory at the same time.
+    vllm_enable_sleep_mode: bool = True
     vllm_importance_sampling_correction: bool = False
 
     # -- CPPO --------------------------------------------------------------

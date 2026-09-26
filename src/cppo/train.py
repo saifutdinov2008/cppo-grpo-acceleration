@@ -100,6 +100,8 @@ def build_grpo_config(settings: RunSettings, geometry: BatchGeometry) -> GRPOCon
         use_vllm=settings.use_vllm,
         vllm_mode=settings.vllm_mode,
         vllm_gpu_memory_utilization=settings.vllm_gpu_memory_utilization,
+        vllm_tensor_parallel_size=settings.vllm_tensor_parallel_size,
+        vllm_enable_sleep_mode=settings.vllm_enable_sleep_mode,
         vllm_importance_sampling_correction=settings.vllm_importance_sampling_correction,
         # objective
         beta=settings.beta,

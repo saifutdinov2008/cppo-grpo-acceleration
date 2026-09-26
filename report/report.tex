@@ -416,6 +416,43 @@ mode is exact only when $\beta = 0$ and, because it makes the retained count
 data-dependent, is restricted to single-process runs --- unequal batch sizes
 across ranks would deadlock a collective operation.
 
+
+\subsection{Accelerating the rollout stage}
+\label{sec:rollout}
+
+The task asks for acceleration of \emph{both} stages. CPPO addresses the
+update stage only: advantages do not exist until sampling has finished, so no
+completion-pruning method can shrink the rollout. The three costs named in the
+problem statement map onto this pipeline as follows.
+
+\paragraph{Simultaneous storage of multiple LLMs.} Setting $\beta = 0$ removes
+the reference model entirely --- no second set of weights and no reference
+forward pass. vLLM \emph{sleep mode} releases the sampler's KV cache and
+weights between rollouts, so the sampler and the optimiser never hold GPU
+memory at the same time. Optional LoRA (\texttt{use\_peft}) reduces optimiser
+state from all $0.6$B parameters to the adapter's. It is worth stating plainly
+that $\beta = 0$ is a memory optimisation and not merely a modelling choice:
+it is the single largest memory saving in the pipeline, and it is also what
+makes pruning-before-every-forward-pass exact (Section~\ref{sec:pruning-point}).
+
+\paragraph{Slow autoregressive rollout.} Generation uses
+vLLM~\cite{kwon2023vllm} with PagedAttention and continuous batching, in
+\emph{colocate} mode so the sampler shares the training process rather than
+requiring a second device. CPPO's dynamic completion allocation helps here
+too, which is easy to miss: enlarging the generation batch by
+$m = \lfloor G/k \rfloor$ gives vLLM more sequences to batch per decoding
+step, which is precisely what continuous batching needs to reach high
+throughput. Allocation is usually described as an update-stage trick; it is
+also a rollout-stage one.
+
+\paragraph{Backpropagation updates.} This is CPPO itself --- back-propagating
+through $k$ of $G$ completions selected by $|\Adv_i|$ --- together with
+gradient checkpointing and bfloat16.
+
+What the pipeline does \emph{not} do is reduce the number of tokens generated.
+That is the remaining lever, and Section~\ref{sec:analysis} explains why it is
+now the one that matters most.
+
 \section{Experimental setup}
 \label{sec:setup}
 
@@ -662,9 +699,11 @@ important consequences are:
   numbers is not the configuration that is best in absolute terms.
   \item \textbf{The rollout is not immune in principle.} Nothing in the
   rollout depends on advantages, which do not exist until sampling has
-  finished, so completion pruning cannot shrink it. Reducing rollout cost
-  needs an orthogonal method --- speculative or truncated sampling, early
-  stopping of degenerate groups, or reusing completions across steps.
+  finished, so completion pruning cannot shrink it. The rollout is instead
+  accelerated by the measures in Section~\ref{sec:rollout}; reducing it
+  \emph{further} needs a method that cuts the number of tokens generated ---
+  speculative or truncated sampling, early stopping of degenerate groups, or
+  reusing completions across steps.
 \end{itemize}
 
 Because $f$ is measured directly by the profiling mixin (both stages are
