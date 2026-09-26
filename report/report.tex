@@ -458,7 +458,89 @@ without a task-specific adapter.
 \section{Results}
 \label{sec:results}
 
+\subsection{Update-stage scaling, measured on Qwen3-0.6B}
+\label{sec:results-scaling}
+
+Apple M1 Pro (14-core GPU, 16\,GB unified memory), PyTorch MPS backend,
+bfloat16, gradient checkpointing enabled, completion length 128 tokens, three
+timed steps after one warm-up. One group of $G = 8$ completions is pruned to
+$k$ and the resulting forward, backward and optimiser step is timed; no
+generation and no reward model are involved, so the measurement isolates
+exactly what CPPO changes.
+
+A least-squares fit over the eight points (Figure~\ref{fig:scaling}) gives
+\[
+  T(k) = 0.3360\,\mathrm{s} + 0.5163\,\mathrm{s} \cdot k,
+  \qquad R^2 = 0.99982 ,
+\]
+so the update stage is linear in the number of retained completions to within
+measurement noise. The intercept is the batch-independent cost --- the AdamW
+update over all $0.6$B parameters, kernel launches, synchronisation --- and
+amounts to 7.5\% of the baseline step. Two consequences follow.
+
+\paragraph{Pruning alone cannot reach $G/k$.} At $P = 0.75$ the measured
+speedup is $3.23\times$ rather than $4\times$, because the fixed cost is now
+amortised over a quarter of the work. The update-stage ceiling as $k \to 0$ is
+$T(8)/0.3360 = 13.3\times$.
+
+\paragraph{Dynamic allocation recovers that loss.} Refilling the batch with
+completions from $m = \lfloor G/k \rfloor$ questions restores full batch
+width, so the fixed cost is amortised as well as the baseline's while $m$
+times more questions are covered: $4.01\times$ at $P = 0.75$ and
+$8.02\times$ at $P = 0.875$, against $3.23\times$ and $5.39\times$ for pruning
+alone (Figure~\ref{fig:throughput}). This reproduces, on different hardware
+and a different model, the mechanism behind the paper's component ablation
+($1.23\times$ for pruning alone, $1.65\times$ once allocation is added), and
+it is why Section~\ref{sec:geometry} treats allocation as central rather than
+as a detail.
+
+The two curves cross at $k = 3$, where $k \nmid G$ leaves the refilled batch
+holding six of eight slots. Pruning rates for which $k$ divides $G$ ---
+$P \in \{0.5,\, 0.75,\, 0.875\}$ at $G = 8$ --- are the ones worth
+configuring.
+
+Memory is deliberately omitted from the benchmark table: the MPS backend
+exposes only an instantaneous allocation figure rather than a high-water mark,
+so it cannot report a trustworthy activation peak. Peak-memory measurement
+requires the CUDA path, which \texttt{cppo/profiling.py} uses when a CUDA
+device is present.
+
+\subsection{Tables}
+\label{sec:results-tables}
+
 \input{generated_tables}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/update_stage_scaling.pdf}
+\caption{Update-stage step time against the number of retained completions,
+measured on Qwen3-0.6B. The relationship is linear to within noise; the
+intercept is the cost no amount of pruning can remove, and it is what keeps
+the pruning-only speedup below $G/k$.}
+\label{fig:scaling}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/throughput_gain.pdf}
+\caption{Measured pruning-only speedup against the question throughput gain
+that dynamic completion allocation delivers. Refilling the batch restores the
+ideal $G/k$ scaling that the fixed per-step cost would otherwise eat; the two
+curves coincide below $P = 50\%$, where $m = 1$ leaves nothing to
+reallocate.}
+\label{fig:throughput}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/amdahl_ceiling.pdf}
+\caption{The end-to-end consequence of Eq.~\eqref{eq:amdahl}. Because
+completion pruning leaves the rollout untouched, the whole-run speedup is
+capped at $1/(1-f)$ regardless of the pruning rate. The published
+$8.32\times$ corresponds to the $f \approx 0.88$ curve; a KL-free
+configuration with a vLLM rollout sits much lower.}
+\label{fig:amdahl}
+\end{figure}
 
 \section{Analysis}
 \label{sec:analysis}

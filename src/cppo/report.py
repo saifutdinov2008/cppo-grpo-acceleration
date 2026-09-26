@@ -206,7 +206,11 @@ def _performance_table(summaries: Sequence[RunSummary], latex: bool) -> str:
     Returns:
         The rendered table.
     """
-    baseline_throughput = summaries[0].questions_per_second if summaries else 0.0
+    if not summaries:
+        if latex:
+            return r"\emph{No training runs available.}"
+        return "_No training runs available._"
+    baseline_throughput = summaries[0].questions_per_second
     headers = [
         "Method",
         "P",
@@ -257,6 +261,7 @@ def _accuracy_table(summaries: Sequence[RunSummary], latex: bool) -> str:
         The rendered table, or a placeholder when no accuracies are present.
     """
     tasks = sorted({task for summary in summaries for task in summary.accuracies})
+
     if not tasks:
         if latex:
             return r"\emph{No evaluation results available.}"
@@ -427,7 +432,10 @@ def _build_parser() -> argparse.ArgumentParser:
     """Return the command-line parser for the report generator."""
     parser = argparse.ArgumentParser(description="Render result tables from run artefacts.")
     parser.add_argument(
-        "--profiles", nargs="+", required=True, help="profile.json paths, baseline first"
+        "--profiles",
+        nargs="*",
+        default=[],
+        help="profile.json paths, baseline first; omit for a benchmark-only report",
     )
     parser.add_argument(
         "--evals", nargs="*", default=[], help="eval.json paths, aligned with --profiles"

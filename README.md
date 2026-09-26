@@ -83,8 +83,9 @@ src/cppo/
 configs/         base.yaml + one file per experiment (YAML `extends:` inheritance)
 scripts/         setup / train / evaluate / benchmark / smoke_test / run_all / lint
 benchmarks/      update_stage_benchmark.py — isolates CPPO's effect from the rollout
+                 plot_results.py            — renders the report's figures
 tests/           80 unit tests + 4 end-to-end trainer tests
-report/          report.tex, references.bib, Makefile
+report/          report.tex, references.bib, figures/, Makefile
 results/         JSON artefacts produced by the runs
 ```
 
@@ -386,6 +387,8 @@ This one equation explains the whole spread of published numbers:
   truncated sampling, early termination of degenerate groups, cross-step
   completion reuse).
 
+![End-to-end speedup ceiling as a function of the update stage share](report/figures/amdahl_ceiling.png)
+
 Because `f` is measured directly by the profiling mixin — both stages timed by
 the same code in both runs, and additive by construction — this equation is a
 falsifiable prediction that the tables below can be checked against.
@@ -483,6 +486,8 @@ backend, bfloat16, gradient checkpointing on, completion length 128 tokens,
 | 75.00% | 2 | 2 | 256 | 1.3869 +/- 0.0060 | 3.23x | 4.01x |
 | 87.50% | 1 | 1 | 128 | 0.8302 +/- 0.0019 | 5.39x | 8.02x |
 
+![Update-stage step time against retained completions](report/figures/update_stage_scaling.png)
+
 **The update stage is almost perfectly linear in `k`.** A least-squares fit
 over the eight points gives
 
@@ -505,6 +510,8 @@ follow directly:
    as well as the baseline's while `m`× more questions are covered: **4.01× at
    `P = 0.75`** and **8.02× at `P = 0.875`**, against 3.23× and 5.39× for
    pruning alone.
+
+![Pruning-only speedup versus the gain with dynamic allocation](report/figures/throughput_gain.png)
 
 Point 2 reproduces, on our own hardware and model, the mechanism behind the
 paper's component ablation (1.23× for pruning alone → 1.65× once allocation is
@@ -540,6 +547,7 @@ _Pending._
 | `scripts/train.sh <config>` | train one configuration (`NUM_GPUS>1` → `accelerate` + ZeRO-2) |
 | `scripts/evaluate.sh <model> <out.json>` | `lm_eval` on gsm8k, minerva_math, aime24 |
 | `scripts/benchmark_update_stage.sh [device]` | isolate the update stage from the rollout |
+| `python benchmarks/plot_results.py` | render the report's figures from a benchmark JSON |
 | `scripts/run_all.sh` | the full study: train + evaluate + benchmark + tables |
 | `scripts/lint.sh` | pylint, mypy and pytest |
 

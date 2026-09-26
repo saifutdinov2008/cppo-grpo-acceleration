@@ -179,3 +179,28 @@ def test_allocation_column_accounts_for_partly_filled_batches() -> None:
     # m = 8 // 3 = 2, so the step holds 6 completions: T(6) = 7, and the
     # throughput gain is 2 * 9 / 7 = 2.57x -- not the naive 2.00x.
     assert "2.57x" in rendered
+
+
+def test_tables_render_without_any_training_runs() -> None:
+    """A benchmark-only report is valid: the run tables say so explicitly."""
+    benchmark = {
+        "num_generations": 4,
+        "results": [
+            {
+                "pruning_rate": 0.0,
+                "num_retained": 4,
+                "completions_per_step": 4,
+                "tokens_per_step": 16,
+                "mean_step_seconds": 2.0,
+                "stdev_step_seconds": 0.0,
+                "peak_memory_gib": 1.0,
+                "speedup": 1.0,
+            }
+        ],
+    }
+    rendered = render_tables([], benchmark)
+    assert "_No training runs available._" in rendered
+    assert "Tokens/step" in rendered
+
+    latex = render_tables([], benchmark, latex=True)
+    assert r"\emph{No training runs available.}" in latex

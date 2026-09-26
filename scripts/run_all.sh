@@ -51,8 +51,11 @@ echo "=============================================================="
 bash scripts/benchmark_update_stage.sh auto results/update_stage_benchmark.json
 
 echo "=============================================================="
-echo "Rendering result tables"
+echo "Rendering figures and result tables"
 echo "=============================================================="
+python benchmarks/plot_results.py \
+  --benchmark results/update_stage_benchmark.json --outdir report/figures
+
 python -m cppo.report \
   --profiles "${PROFILES[@]}" --evals "${EVALS[@]}" \
   --benchmark results/update_stage_benchmark.json \
@@ -62,4 +65,7 @@ python -m cppo.report \
   --benchmark results/update_stage_benchmark.json \
   --format latex --output report/generated_tables.tex
 
-echo "Done. See results/tables.md"
+echo "Done."
+echo "  tables : results/tables.md"
+echo "  figures: report/figures/"
+echo "  report : cd report && make"
