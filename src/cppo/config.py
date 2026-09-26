@@ -91,6 +91,7 @@ class RunSettings:  # pylint: disable=too-many-instance-attributes
     epsilon: float = 0.2
     epsilon_high: float | None = 0.28
     loss_type: str = "dapo"
+    mask_truncated_completions: bool = True
     scale_rewards: str = "group"
     num_train_epochs: float = 1.0
     max_steps: int = -1

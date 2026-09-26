@@ -18,7 +18,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 LOGGER = logging.getLogger(__name__)
 
@@ -116,8 +116,24 @@ def _fmt(value: float | None, digits: int = 2, dash: str = "--") -> str:
     return dash if value is None else f"{value:.{digits}f}"
 
 
+def _latex_cell(text: str) -> str:
+    """Escape a table cell for LaTeX.
+
+    Args:
+        text: The already-formatted cell contents.
+
+    Returns:
+        The cell with ``%`` escaped and ``+/-`` typeset as a proper symbol.
+    """
+    return text.replace("%", r"\%").replace("+/-", r"$\pm$")
+
+
 def _table(headers: Sequence[str], rows: Sequence[Sequence[str]], latex: bool) -> str:
     """Render a table in Markdown or LaTeX.
+
+    Wide LaTeX tables are wrapped in a ``\resizebox`` that only ever shrinks,
+    so a seven-column result table stays inside the text block while a narrow
+    one keeps its natural size.
 
     Args:
         headers: Column headers.
@@ -134,13 +150,14 @@ def _table(headers: Sequence[str], rows: Sequence[Sequence[str]], latex: bool) -
 
     spec = "l" + "r" * (len(headers) - 1)
     lines = [
+        r"\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{%",
         f"\\begin{{tabular}}{{{spec}}}",
-        "\\toprule",
-        " & ".join(header.replace("%", r"\%") for header in headers) + r" \\",
-        "\\midrule",
+        r"\toprule",
+        " & ".join(_latex_cell(header) for header in headers) + r" \\",
+        r"\midrule",
     ]
-    lines.extend(" & ".join(cell.replace("%", r"\%") for cell in row) + r" \\" for row in rows)
-    lines.extend(["\\bottomrule", "\\end{tabular}"])
+    lines.extend(" & ".join(_latex_cell(cell) for cell in row) + r" \\" for row in rows)
+    lines.extend([r"\bottomrule", r"\end{tabular}", "}"])
     return "\n".join(lines)
 
 
@@ -214,18 +231,53 @@ def _accuracy_table(summaries: Sequence[RunSummary], latex: bool) -> str:
     return _table(headers, rows, latex)
 
 
+def _linear_step_cost(
+    points: Sequence[tuple[float, float]]
+) -> Callable[[float], float]:
+    """Fit ``T(c) = a + b*c`` to measured (completions, seconds) points.
+
+    The update stage is a fixed per-step cost -- the optimiser update, which
+    touches every parameter regardless of batch size -- plus a term linear in
+    the number of completions back-propagated.  A least-squares fit over the
+    measured sweep recovers both, and lets the table report the cost of batch
+    widths that were not measured directly.
+
+    Args:
+        points: Measured ``(completions_per_step, mean_step_seconds)`` pairs.
+
+    Returns:
+        A callable evaluating the fitted cost at any batch width.
+    """
+    count = len(points)
+    if count < 2:
+        constant = points[0][1] if points else 0.0
+        return lambda _: constant
+    mean_x = sum(x for x, _ in points) / count
+    mean_y = sum(y for _, y in points) / count
+    variance = sum((x - mean_x) ** 2 for x, _ in points)
+    slope = (
+        sum((x - mean_x) * (y - mean_y) for x, y in points) / variance if variance else 0.0
+    )
+    intercept = mean_y - slope * mean_x
+    return lambda completions: intercept + slope * completions
+
+
 def _benchmark_table(benchmark: dict[str, Any] | None, latex: bool) -> str:
     """Render the update-stage micro-benchmark table.
 
-    Two speedup columns are reported.  *Pruning only* is measured directly: the
-    update batch shrinks from ``G`` to ``k`` completions, so the step gets
-    cheaper but the device is left under-occupied, and the fixed per-step cost
-    (the optimiser update over all parameters) stops the gain from reaching
-    ``G/k``.  *With allocation* is derived from the same measurements: dynamic
-    completion allocation refills the batch back to ``G`` completions drawn
-    from ``m = G // k`` questions, so the step time returns to the baseline row
-    while covering ``m`` times more questions -- a question throughput gain of
-    exactly ``m``, with no overhead penalty.
+    Two speedup columns are reported.
+
+    *Pruning only* is measured directly: the update batch shrinks from ``G`` to
+    ``k`` completions, so each step gets cheaper, but the device is left
+    under-occupied and the fixed per-step cost keeps the gain below ``G/k``.
+
+    *With allocation* is derived from the same measurements.  Dynamic
+    completion allocation refills the batch with completions from
+    ``m = G // k`` questions, so a step processes ``m * k`` completions instead
+    of ``k`` while covering ``m`` times more questions.  The question
+    throughput therefore improves by ``m * T(G) / T(m*k)``, evaluated on the
+    fitted cost curve.  When ``k`` does not divide ``G`` the refilled batch is
+    narrower than ``G`` and the two columns can cross.
 
     Args:
         benchmark: The parsed benchmark payload, or ``None``.
@@ -238,7 +290,17 @@ def _benchmark_table(benchmark: dict[str, Any] | None, latex: bool) -> str:
         if latex:
             return r"\emph{No update-stage benchmark available.}"
         return "_No update-stage benchmark available._"
+
+    results = list(benchmark.get("results", []))
+    if not results:
+        return "_No update-stage benchmark available._"
+
     group_size = int(benchmark.get("num_generations", 0))
+    cost = _linear_step_cost(
+        [(float(r["completions_per_step"]), float(r["mean_step_seconds"])) for r in results]
+    )
+    baseline_seconds = float(results[0]["mean_step_seconds"])
+
     headers = [
         "P",
         "k",
@@ -249,18 +311,23 @@ def _benchmark_table(benchmark: dict[str, Any] | None, latex: bool) -> str:
         "Speedup (with allocation)",
     ]
     rows = []
-    for result in benchmark.get("results", []):
+    for result in results:
         retained = int(result["num_retained"])
+        completions = int(result["completions_per_step"])
         multiplier = max(1, group_size // retained) if group_size else 1
+        allocated_seconds = cost(completions * multiplier)
+        allocated_speedup = (
+            multiplier * baseline_seconds / allocated_seconds if allocated_seconds > 0 else 0.0
+        )
         rows.append(
             [
                 f"{100 * result['pruning_rate']:.2f}%",
                 str(retained),
-                str(result["completions_per_step"]),
+                str(completions),
                 str(result["tokens_per_step"]),
                 f"{result['mean_step_seconds']:.4f} +/- {result['stdev_step_seconds']:.4f}",
                 f"{result['speedup']:.2f}x",
-                f"{multiplier:.2f}x",
+                f"{allocated_speedup:.2f}x",
             ]
         )
     return _table(headers, rows, latex)

@@ -75,12 +75,18 @@ def test_markdown_tables_report_speedup_against_the_first_row() -> None:
 
 
 def test_latex_tables_use_booktabs_and_escape_percent() -> None:
-    """LaTeX output is a ``tabular`` with escaped percent signs."""
+    """LaTeX output is a ``tabular`` whose content escapes percent signs."""
     summaries = [summarize_run(_profile("grpo", 0.0, 200.0, 1.0))]
     rendered = render_tables(summaries, latex=True)
     assert "\\begin{tabular}" in rendered and "\\toprule" in rendered
+    assert "\\resizebox" in rendered  # wide tables are shrunk to the text block
     assert "0.00\\%" in rendered
-    assert "%" not in rendered.replace("\\%", "")
+
+    # A bare `%` would comment out the rest of the line. The only legitimate
+    # one is a trailing `%` used to swallow a line break.
+    for line in rendered.splitlines():
+        body = line[:-1] if line.endswith("%") and not line.endswith("\\%") else line
+        assert "%" not in body.replace("\\%", ""), line
 
 
 def test_benchmark_table_reports_both_speedup_columns() -> None:
@@ -114,6 +120,43 @@ def test_benchmark_table_reports_both_speedup_columns() -> None:
     }
     rendered = render_tables([summarize_run(_profile("grpo", 0.0, 10.0, 1.0))], benchmark)
     assert "Tokens/step" in rendered and "2048" in rendered
-    # Pruning alone falls short of G/k = 4 because of the fixed per-step cost;
-    # dynamic allocation recovers exactly m = 4.
-    assert "3.20x" in rendered and "4.00x" in rendered
+    # Pruning alone falls short of G/k = 4 because of the fixed per-step cost.
+    assert "3.20x" in rendered
+    # Allocation refills the batch to m*k = 8 completions, i.e. the baseline
+    # width, so the step costs the baseline time while covering m = 4 times
+    # more questions: a 4x question throughput gain.
+    assert "4.00x" in rendered
+
+
+def test_allocation_column_accounts_for_partly_filled_batches() -> None:
+    """When k does not divide G the refilled batch is narrower than G."""
+    # Cost model behind the numbers: T(c) = 1 + c, so T(8) = 9.
+    benchmark = {
+        "num_generations": 8,
+        "results": [
+            {
+                "pruning_rate": 0.0,
+                "num_retained": 8,
+                "completions_per_step": 8,
+                "tokens_per_step": 8,
+                "mean_step_seconds": 9.0,
+                "stdev_step_seconds": 0.0,
+                "peak_memory_gib": 1.0,
+                "speedup": 1.0,
+            },
+            {
+                "pruning_rate": 0.625,
+                "num_retained": 3,
+                "completions_per_step": 3,
+                "tokens_per_step": 3,
+                "mean_step_seconds": 4.0,
+                "stdev_step_seconds": 0.0,
+                "peak_memory_gib": 1.0,
+                "speedup": 2.25,
+            },
+        ],
+    }
+    rendered = render_tables([summarize_run(_profile("grpo", 0.0, 10.0, 1.0))], benchmark)
+    # m = 8 // 3 = 2, so the step holds 6 completions: T(6) = 7, and the
+    # throughput gain is 2 * 9 / 7 = 2.57x -- not the naive 2.00x.
+    assert "2.57x" in rendered

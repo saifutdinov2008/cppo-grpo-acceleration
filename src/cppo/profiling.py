@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 import os
 import platform
+import resource
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -30,6 +32,7 @@ __all__ = [
     "ProfilingMixin",
     "StageTimings",
     "collect_environment",
+    "peak_host_rss_bytes",
     "peak_memory_bytes",
     "reset_peak_memory",
 ]
@@ -47,12 +50,29 @@ def reset_peak_memory() -> None:
         torch.mps.empty_cache()
 
 
-def peak_memory_bytes() -> dict[str, float]:
-    """Return peak accelerator memory in bytes for the current process.
+def peak_host_rss_bytes() -> float:
+    """Return the process's peak resident set size in bytes.
+
+    This is the only memory figure available for a CPU-only run, and it is a
+    true high-water mark rather than an instantaneous reading.
 
     Returns:
-        A mapping with ``allocated`` and ``reserved`` peaks.  Both are ``0.0``
-        when no accelerator is in use.
+        Peak RSS in bytes.
+    """
+    usage = float(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    # `ru_maxrss` is bytes on macOS and kilobytes on Linux.
+    return usage if sys.platform == "darwin" else usage * 1024.0
+
+
+def peak_memory_bytes() -> dict[str, float]:
+    """Return peak memory in bytes for the current process.
+
+    Returns:
+        A mapping with ``allocated`` and ``reserved`` figures. On CUDA both are
+        true peaks. On Apple MPS only instantaneous readings are exposed by the
+        backend, so callers that need a peak must sample repeatedly. Without an
+        accelerator, peak host RSS is reported instead so that CPU runs still
+        produce a meaningful memory number.
     """
     if torch.cuda.is_available():
         return {
@@ -62,7 +82,8 @@ def peak_memory_bytes() -> dict[str, float]:
     if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
         driver = float(torch.mps.driver_allocated_memory())
         return {"allocated": float(torch.mps.current_allocated_memory()), "reserved": driver}
-    return {"allocated": 0.0, "reserved": 0.0}
+    rss = peak_host_rss_bytes()
+    return {"allocated": rss, "reserved": rss}
 
 
 def collect_environment() -> dict[str, Any]:
@@ -83,6 +104,19 @@ def collect_environment() -> dict[str, Any]:
         "cuda_devices": devices,
         "world_size": int(os.environ.get("WORLD_SIZE", "1")),
     }
+
+
+def _memory_source() -> str:
+    """Name the backend the memory figures came from.
+
+    Returns:
+        ``"cuda"``, ``"mps"`` or ``"host_rss"``.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        return "mps"
+    return "host_rss"
 
 
 @dataclass
@@ -232,6 +266,7 @@ class ProfilingMixin:
         )
         report: dict[str, Any] = {
             "wall_clock_seconds": elapsed,
+            "peak_memory_source": _memory_source(),
             "peak_memory_allocated_gib": memory["allocated"] / _BYTES_PER_GIB,
             "peak_memory_reserved_gib": memory["reserved"] / _BYTES_PER_GIB,
             "stages": self.stage_timings.as_dict(),

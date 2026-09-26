@@ -1,6 +1,70 @@
-% Placeholder. Regenerate with:
-%   python -m cppo.report --profiles results/*/profile.json \
-%       --evals results/*/eval.json --benchmark results/update_stage_benchmark.json \
-%       --format latex --output report/generated_tables.tex
-\emph{No results have been generated yet. Run \texttt{bash scripts/run\_all.sh}
-and regenerate this file with \texttt{python -m cppo.report}.}
+% Auto-generated from results/update_stage_mps_qwen3_0.6b.json. Do not edit.
+\subsection*{Update-stage scaling, measured on Qwen3-0.6B}
+
+Apple M1 Pro (14-core GPU, 16\,GB unified memory), PyTorch MPS backend,
+bfloat16, gradient checkpointing enabled, completion length 128 tokens, three
+timed steps after one warm-up. One group of $G = 8$ completions is pruned to
+$k$ and the resulting forward, backward and optimiser step is timed; no
+generation and no reward model are involved, so the measurement isolates
+exactly what CPPO changes.
+
+\bigskip
+\noindent
+\begin{tabular}{lrrrrrr}
+\toprule
+P & k & Completions/step & Tokens/step & Step time (s) & Speedup (pruning only) & Speedup (with allocation) \\
+\midrule
+0.00\% & 8 & 8 & 1024 & 4.4768 +/- 0.0016 & 1.00x & 1.00x \\
+12.50\% & 7 & 7 & 896 & 3.9283 +/- 0.0027 & 1.14x & 1.13x \\
+25.00\% & 6 & 6 & 768 & 3.4326 +/- 0.0017 & 1.30x & 1.30x \\
+37.50\% & 5 & 5 & 640 & 2.9138 +/- 0.0011 & 1.54x & 1.53x \\
+50.00\% & 4 & 4 & 512 & 2.4255 +/- 0.0019 & 1.85x & 2.00x \\
+62.50\% & 3 & 3 & 384 & 1.8822 +/- 0.0031 & 2.38x & 2.61x \\
+75.00\% & 2 & 2 & 256 & 1.3869 +/- 0.0060 & 3.23x & 4.01x \\
+87.50\% & 1 & 1 & 128 & 0.8302 +/- 0.0019 & 5.39x & 8.02x \\
+\bottomrule
+\end{tabular}
+
+\bigskip
+\noindent
+A least-squares fit over the eight points gives
+\[
+  T(k) = 0.3360\,\mathrm{s} + 0.5163\,\mathrm{s} \cdot k,
+  \qquad R^2 = 0.99982 ,
+\]
+so the update stage is linear in the number of retained completions to within
+measurement noise. The intercept is the batch-independent cost --- the AdamW
+update over all $0.6$B parameters, kernel launches, synchronisation --- and
+amounts to 7.5\% of the baseline step. Two consequences follow.
+
+\paragraph{Pruning alone cannot reach $G/k$.} At $P = 0.75$ the measured
+speedup is $3.23\times$ rather than $4\times$, because the fixed cost is now
+amortised over a quarter of the work. The update-stage ceiling as $k \to 0$ is
+$T(8)/0.3360 = 13.3\times$.
+
+\paragraph{Dynamic allocation recovers that loss.} Refilling the batch with
+completions from $m = \lfloor G/k \rfloor$ questions restores full batch
+width, so the fixed cost is amortised as well as the baseline's while $m$
+times more questions are covered: $4.01\times$ at $P = 0.75$ and
+$8.02\times$ at $P = 0.875$, against $3.23\times$ and $5.39\times$ for pruning
+alone. This reproduces, on different hardware and a different model, the
+mechanism behind the paper's component ablation ($1.23\times$ for pruning
+alone, $1.65\times$ once allocation is added), and it is why
+Section~\ref{sec:geometry} treats allocation as central rather than as a
+detail.
+
+The two columns cross at $k = 3$, where $k \nmid G$ leaves the refilled batch
+holding six of eight slots. Pruning rates for which $k$ divides $G$ ---
+$P \in \{0.5,\, 0.75,\, 0.875\}$ at $G = 8$ --- are the ones worth
+configuring.
+
+Memory is deliberately omitted from this table: the MPS backend exposes only
+an instantaneous allocation figure rather than a high-water mark, so it cannot
+report a trustworthy activation peak. Peak-memory measurement requires the
+CUDA path, which \texttt{cppo/profiling.py} uses when a CUDA device is
+present.
+
+\subsection*{End-to-end training and downstream accuracy}
+
+\emph{Pending: run \texttt{bash scripts/run\_all.sh} on a CUDA machine, then
+regenerate this file with \texttt{python -m cppo.report {-}{-}format latex}.}

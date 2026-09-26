@@ -107,7 +107,7 @@ def build_grpo_config(settings: RunSettings, geometry: BatchGeometry) -> GRPOCon
         epsilon_high=settings.epsilon_high,
         loss_type=settings.loss_type,
         scale_rewards=settings.scale_rewards,
-        mask_truncated_completions=True,
+        mask_truncated_completions=settings.mask_truncated_completions,
         # optimisation
         learning_rate=settings.learning_rate,
         lr_scheduler_type=settings.lr_scheduler_type,

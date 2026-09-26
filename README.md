@@ -83,7 +83,7 @@ src/cppo/
 configs/         base.yaml + one file per experiment (YAML `extends:` inheritance)
 scripts/         setup / train / evaluate / benchmark / smoke_test / run_all / lint
 benchmarks/      update_stage_benchmark.py — isolates CPPO's effect from the rollout
-tests/           57 unit tests + 4 end-to-end trainer tests
+tests/           80 unit tests + 4 end-to-end trainer tests
 report/          report.tex, references.bib, Makefile
 results/         JSON artefacts produced by the runs
 ```
@@ -454,19 +454,75 @@ fewer, fatter optimiser steps.
 
 ## 8. Results
 
-<!-- RESULTS:BEGIN -->
-_Not yet populated. Run `bash scripts/run_all.sh` on a CUDA machine and then_
+### 8.1 Update-stage scaling — measured on Qwen3-0.6B
 
-```bash
-python -m cppo.report \
-  --profiles results/*/profile.json --evals results/*/eval.json \
-  --benchmark results/update_stage_benchmark.json \
-  --format markdown --output results/tables.md
+This is the measurement that isolates exactly what CPPO changes. No dataset,
+no generation, no reward model: a synthetic rollout of one group of `G = 8`
+completions is pruned to `k`, and the resulting forward + backward +
+optimiser step is timed.
+
+*Hardware: Apple M1 Pro (14-core GPU, 16 GB unified memory), PyTorch MPS
+backend, bfloat16, gradient checkpointing on, completion length 128 tokens,
+3 timed steps after 1 warm-up. Reproduce with*
+`bash scripts/benchmark_update_stage.sh mps`. *Raw data:*
+[`results/update_stage_mps_qwen3_0.6b.json`](results/update_stage_mps_qwen3_0.6b.json).
+
+| P | k | Completions/step | Tokens/step | Step time (s) | Speedup (pruning only) | Speedup (with allocation) |
+|---|---|---|---|---|---|---|
+| 0.00% | 8 | 8 | 1024 | 4.4768 +/- 0.0016 | 1.00x | 1.00x |
+| 12.50% | 7 | 7 | 896 | 3.9283 +/- 0.0027 | 1.14x | 1.13x |
+| 25.00% | 6 | 6 | 768 | 3.4326 +/- 0.0017 | 1.30x | 1.30x |
+| 37.50% | 5 | 5 | 640 | 2.9138 +/- 0.0011 | 1.54x | 1.53x |
+| 50.00% | 4 | 4 | 512 | 2.4255 +/- 0.0019 | 1.85x | 2.00x |
+| 62.50% | 3 | 3 | 384 | 1.8822 +/- 0.0031 | 2.38x | 2.61x |
+| 75.00% | 2 | 2 | 256 | 1.3869 +/- 0.0060 | 3.23x | 4.01x |
+| 87.50% | 1 | 1 | 128 | 0.8302 +/- 0.0019 | 5.39x | 8.02x |
+
+**The update stage is almost perfectly linear in `k`.** A least-squares fit
+over the eight points gives
+
+```
+T(k) = 0.3360 s  +  0.5163 s × k          R² = 0.99982
 ```
 
-_which writes the tables that belong here (and, with `--format latex`, into
-`report/generated_tables.tex`)._
-<!-- RESULTS:END -->
+The intercept is the batch-independent cost — the AdamW update over all 0.6B
+parameters, kernel launches, synchronisation — and is **7.5% of the baseline
+step**. The slope is the per-completion cost that CPPO removes. Two things
+follow directly:
+
+1. **Pruning alone cannot reach `G/k`.** At `P = 0.75` the measured speedup is
+   **3.23×**, not 4×, because the fixed cost is now amortised over a quarter of
+   the work. The ceiling for the update stage as `k → 0` is
+   `T(8)/0.3360 = 13.3×`.
+2. **Dynamic allocation recovers the loss, and it is the larger effect at high
+   pruning rates.** Refilling the batch to `m·k` completions from `m = ⌊G/k⌋`
+   questions brings the step back to full width, so the fixed cost is amortised
+   as well as the baseline's while `m`× more questions are covered: **4.01× at
+   `P = 0.75`** and **8.02× at `P = 0.875`**, against 3.23× and 5.39× for
+   pruning alone.
+
+Point 2 reproduces, on our own hardware and model, the mechanism behind the
+paper's component ablation (1.23× for pruning alone → 1.65× once allocation is
+added). It is also why `cppo/geometry.py` exists: allocation is not a detail,
+it is roughly half of CPPO's benefit.
+
+Note the two columns **cross** at `k = 3`, where allocation is 2.61× against
+2.38× for pruning alone but short of the naive `m = 2`. `k` does not divide
+`G`, so the refilled batch holds 6 of 8 slots. Pruning rates that make `k` a
+divisor of `G` — `P ∈ {0.5, 0.75, 0.875}` for `G = 8` — are the ones worth
+configuring.
+
+*Caveat on memory:* the MPS backend exposes only an instantaneous allocation
+figure, not a high-water mark, so this run's memory column is not a
+trustworthy activation peak and is omitted. Peak-memory numbers require the
+CUDA path (`torch.cuda.max_memory_allocated`), which `cppo/profiling.py`
+already uses when a CUDA device is present.
+
+### 8.2 End-to-end training and downstream accuracy
+
+<!-- E2E:BEGIN -->
+_Pending._
+<!-- E2E:END -->
 
 ---
 
@@ -516,22 +572,34 @@ bash scripts/lint.sh
 | Check | Status |
 |---|---|
 | `pylint src/cppo tests benchmarks` | **10.00/10**, zero messages |
-| `mypy` (strict, 16 source files) | **no issues** |
-| `pytest tests` | **57 passed** |
+| `mypy` (strict, 19 source files) | **no issues** |
+| `pytest tests` | **84 passed** (80 unit + 4 end-to-end) |
+| `shellcheck scripts/*.sh` | **clean** |
 
 `mypy` runs in `strict` mode. Third-party packages that ship `py.typed` but
 re-export lazily (`trl`, `transformers`, `accelerate`, `peft`) get
-`implicit_reexport = true`; nothing in this package is exempted. CI
-(`.github/workflows/ci.yml`) runs all three checks plus `shellcheck` on every
-push.
+`implicit_reexport = true`; nothing in this package is exempted.
+CI (`.github/workflows/ci.yml`) runs every check above on each push.
 
-The test suite covers the pruning primitives (top-`k` correctness, sign
-agnosticism, deterministic tie-breaking, per-group equal counts, degenerate
-groups, shape validation), the batch-geometry arithmetic, the reward functions
-(nested `\boxed{}`, symbolic equivalence, malformed output), and four
-end-to-end tests that construct real TRL trainers on a tiny 2-layer Qwen3 and
-assert that CPPO generates the full group but back-propagates through the
-pruned subset.
+The test suite covers:
+
+- **pruning primitives** — top-`k` correctness, sign agnosticism, deterministic
+  tie-breaking, equal counts per group, degenerate groups, shape validation;
+- **batch geometry** — that allocation restores the baseline micro-batch, that
+  disabling it shrinks the micro-batch, and that indivisible layouts are
+  rejected;
+- **rewards** — nested `\boxed{}`, symbolic equivalence (`1/2` ≡ `0.5`),
+  conversational format, malformed output;
+- **configuration** — YAML `extends` chains and cycle detection, CLI-over-YAML
+  precedence, rejection of unknown keys, and that every shipped config in
+  `configs/` loads and matches its filename;
+- **profiling** — that rollout and update times partition the training step
+  additively, and that the memory figure records which backend produced it;
+- **report rendering** — including a regression test for a bare `%` in LaTeX
+  output, which would otherwise comment out the rest of the line;
+- **four end-to-end tests** that build real TRL trainers on a tiny two-layer
+  Qwen3 and assert that CPPO generates the full group but back-propagates
+  through only the pruned subset.
 
 ---
 
