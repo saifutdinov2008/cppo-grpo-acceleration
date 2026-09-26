@@ -84,9 +84,9 @@ configs/         base.yaml + one file per experiment (YAML `extends:` inheritanc
 scripts/         setup / train / evaluate / benchmark / smoke_test / run_all / lint
 benchmarks/      update_stage_benchmark.py — isolates CPPO's effect from the rollout
                  plot_results.py            — renders the report's figures
-tests/           80 unit tests + 4 end-to-end trainer tests
+tests/           91 unit tests + 4 end-to-end trainer tests
 report/          report.tex, references.bib, figures/, Makefile
-results/         JSON artefacts produced by the runs
+results/         JSON artefacts produced by the runs (measurements live here)
 ```
 
 ---
@@ -530,11 +530,85 @@ trustworthy activation peak and is omitted. Peak-memory numbers require the
 CUDA path (`torch.cuda.max_memory_allocated`), which `cppo/profiling.py`
 already uses when a CUDA device is present.
 
-### 8.2 End-to-end training and downstream accuracy
+### 8.2 End-to-end pipeline validation — real Qwen3-0.6B on real DAPO-Math-17k
 
-<!-- E2E:BEGIN -->
-_Pending._
-<!-- E2E:END -->
+**Read this as a plumbing check, not a performance claim.** It runs the whole
+pipeline — dataset, chat template, rollout, `math_verify` rewards,
+group-relative advantages, pruning, loss, optimiser step, profiling — on the
+actual model and the actual training corpus, and confirms that CPPO changes
+what it is supposed to change and nothing else.
+
+*Hardware: Apple M1 Pro, CPU (float32), `configs/smoke_cpu.yaml`: `G = 4`,
+32-token completions, 2 optimiser steps. Reproduce with*
+`bash scripts/smoke_test.sh`.
+
+| Method | P | k | m | Steps | Questions | Wall clock (s) | Rollout (s) | Update (s) | Peak mem (GiB) | Questions/s | Throughput gain |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| smoke-grpo | 0.00% | 4 | 1x | 2 | 2 | 553.0 | 21.1 | 526.1 | 7.47 | 0.0036 | 1.00x |
+| smoke-cppo | 50.00% | 2 | 2x | 2 | 4 | 550.9 | 28.7 | 516.4 | 6.99 | 0.0073 | 2.01x |
+
+Three things are confirmed and one is not.
+
+**Confirmed — dynamic allocation works as designed.** CPPO consumed **4
+questions to GRPO's 2 in the same wall clock**, a **2.01× throughput gain**
+against a predicted `m = ⌊G/k⌋ = 2`. Both runs did the same number of
+optimiser steps on the same update-stage micro-batch width; CPPO simply
+covered twice the data per step. Update time was essentially unchanged
+(516 s vs 526 s) while rollout grew (28.7 s vs 21.1 s), exactly the trade the
+method makes.
+
+**Confirmed — pruning retains what it claims.** The CPPO run logged
+`cppo/retention = 0.5` throughout, i.e. `k = 2` of `G = 4` completions reached
+the policy backward pass.
+
+**Confirmed — the stage split is measured, not assumed.** Rollout and update
+times partition the training step additively, from the same code in both runs.
+
+**Not confirmed — anything about learning.** With 32-token completions
+Qwen3-0.6B emits no `\boxed{}` answer, so every reward was 0, every group had
+zero variance (`cppo/frac_degenerate_groups = 1`), and every advantage was
+therefore 0. The gradient is zero and the model does not move. This is a
+property of the deliberately tiny configuration, not of the pipeline — the
+unit tests in `tests/test_trainer_smoke.py` use a reward that varies within a
+group and assert that CPPO back-propagates through exactly the retained
+subset.
+
+**The evaluation pipeline was exercised too.** Running `cppo.evaluate` against
+the untrained Qwen3-0.6B on five GSM8K problems (CPU, float32, 256 generated
+tokens) returns `exact_match,flexible-extract = 0.20` and
+`exact_match,strict-match = 0.00` —
+[`results/eval_smoke_gsm8k.json`](results/eval_smoke_gsm8k.json). Five problems
+say nothing about accuracy, but the *split* between the two filters confirms a
+design decision: a policy prompted with a chat template and a `\boxed{}`
+convention never emits GSM8K's `#### N` marker, so `strict-match` scores it
+zero regardless of correctness. That is why `cppo/evaluate.py` reports
+`flexible-extract` as the headline metric for GSM8K.
+
+```bash
+python -m cppo.evaluate --model-path Qwen/Qwen3-0.6B --tasks gsm8k \
+  --limit 5 --max-gen-toks 256 --dtype float32 --device cpu --prompt-style boxed
+```
+
+**A note on `f` for this run.** The update stage is 96% of the measured step
+time here, which would imply a very high Amdahl ceiling. Do not generalise it:
+on CPU a 32-token rollout is cheap while a float32 backward pass is
+extravagant. On the reference setup — A100, bf16, vLLM rollout, 1024-token
+completions — the split is far less update-heavy, which is precisely why §7.1
+insists that `f` must be measured per configuration rather than assumed.
+
+### 8.3 What is not measured here
+
+The full study — GRPO baseline against three CPPO pruning rates plus the
+no-allocation ablation, one epoch over 8,192 DAPO-Math problems each, followed
+by `lm_eval` on all three benchmarks — needs a CUDA GPU and roughly 12–18
+GPU-hours. It has **not** been run: this machine has no CUDA device. Every
+script needed to run it is in `scripts/`, `bash scripts/run_all.sh` drives the
+whole sweep, and `python -m cppo.report` regenerates both this section and
+`report/generated_tables.tex` from the resulting JSON artefacts.
+
+The numbers quoted from the CPPO paper in §7.4 are labelled as such throughout
+and are not reproduced here. Nothing in this repository extrapolates a measured
+number onto hardware it was not measured on.
 
 ---
 
@@ -585,8 +659,8 @@ bash scripts/lint.sh
 | Check | Status |
 |---|---|
 | `pylint src/cppo tests benchmarks` | **10.00/10**, zero messages |
-| `mypy` (strict, 19 source files) | **no issues** |
-| `pytest tests` | **84 passed** (80 unit + 4 end-to-end) |
+| `mypy` (strict, 21 source files) | **no issues** |
+| `pytest tests` | **95 passed** (91 unit + 4 end-to-end) |
 | `shellcheck scripts/*.sh` | **clean** |
 
 `mypy` runs in `strict` mode. Third-party packages that ship `py.typed` but
@@ -610,6 +684,8 @@ The test suite covers:
   additively, and that the memory figure records which backend produced it;
 - **report rendering** — including a regression test for a bare `%` in LaTeX
   output, which would otherwise comment out the rest of the line;
+- **evaluation** — the `lm_eval` argument strings for both backends, and the
+  reduction of a harness payload to one headline metric per task;
 - **four end-to-end tests** that build real TRL trainers on a tiny two-layer
   Qwen3 and assert that CPPO generates the full group but back-propagates
   through only the pruned subset.

@@ -52,6 +52,7 @@ def build_model_args(
     *,
     backend: str = "hf",
     dtype: str = "bfloat16",
+    device: str | None = None,
     max_model_len: int = 4096,
     gpu_memory_utilization: float = 0.85,
     tensor_parallel_size: int = 1,
@@ -63,6 +64,9 @@ def build_model_args(
         backend: ``"hf"`` for the Transformers backend or ``"vllm"`` for the
             much faster vLLM backend.
         dtype: Torch dtype used to load the weights.
+        device: Device to pin the Transformers backend to, e.g. ``"cpu"`` or
+            ``"cuda:0"``. ``None`` lets the harness choose. Ignored by vLLM,
+            which manages placement itself.
         max_model_len: Maximum sequence length (vLLM only).
         gpu_memory_utilization: Fraction of VRAM vLLM may claim.
         tensor_parallel_size: Number of GPUs for tensor parallelism (vLLM).
@@ -75,6 +79,8 @@ def build_model_args(
     """
     if backend == "hf":
         parts = [f"pretrained={model_path}", f"dtype={dtype}", "trust_remote_code=True"]
+        if device is not None:
+            parts.append(f"device={device}")
     elif backend == "vllm":
         parts = [
             f"pretrained={model_path}",
@@ -126,6 +132,7 @@ def run_evaluation(
     backend: str = "hf",
     batch_size: str = "auto",
     dtype: str = "bfloat16",
+    device: str | None = None,
     apply_chat_template: bool = True,
     system_instruction: str | None = None,
     max_gen_toks: int | None = 2048,
@@ -145,6 +152,7 @@ def run_evaluation(
         backend: ``"hf"`` or ``"vllm"``.
         batch_size: `lm_eval` batch size; ``"auto"`` lets the harness probe.
         dtype: Torch dtype used to load the weights.
+        device: Device for the Transformers backend; ``None`` auto-selects.
         apply_chat_template: Wrap each prompt in the tokeniser's chat template.
         system_instruction: System prompt prepended to every request.  Pass the
             training system prompt so that train and test prompts agree.
@@ -171,6 +179,7 @@ def run_evaluation(
         model_path,
         backend=backend,
         dtype=dtype,
+        device=device,
         max_model_len=max_model_len,
         gpu_memory_utilization=gpu_memory_utilization,
         tensor_parallel_size=tensor_parallel_size,
@@ -221,6 +230,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--backend", default="hf", choices=["hf", "vllm"])
     parser.add_argument("--batch-size", default="auto")
     parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument(
+        "--device", default=None, help="e.g. cpu or cuda:0; hf backend only"
+    )
     parser.add_argument("--max-gen-toks", type=int, default=2048)
     parser.add_argument("--limit", type=int, default=None, help="documents per task")
     parser.add_argument("--num-fewshot", type=int, default=None)
@@ -273,6 +285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         backend=args.backend,
         batch_size=args.batch_size,
         dtype=args.dtype,
+        device=args.device,
         apply_chat_template=args.apply_chat_template,
         system_instruction=system_instruction,
         max_gen_toks=args.max_gen_toks,

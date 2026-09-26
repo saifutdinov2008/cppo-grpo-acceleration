@@ -24,6 +24,10 @@
   showstringspaces=false,
 }
 
+% Long verbatim tokens (flag names, metric keys) cannot be hyphenated; let TeX
+% stretch the interword space a little rather than overrun the margin.
+\setlength{\emergencystretch}{3em}
+
 \newcommand{\Adv}{A}
 \newcommand{\polold}{\pi_{\theta_{\mathrm{old}}}}
 \newcommand{\polref}{\pi_{\mathrm{ref}}}
@@ -448,12 +452,13 @@ either protocol: it credits an algorithm for covering the same training data
 in less time, and never for covering more data in the same time.
 
 \paragraph{Prompt/evaluation alignment.} The policy is trained with a chat
-template and a \verb|\boxed{}| answer convention, and evaluated through
-\texttt{lm\_eval}'s \texttt{-{}-apply\_chat\_template} flag with the same
-system prompt. \texttt{minerva\_math} and \texttt{aime24} extract from
-\verb|\boxed{}|, and \texttt{gsm8k}'s \texttt{flexible-extract} filter takes
-the last number, so the training format transfers to all three benchmarks
-without a task-specific adapter.
+template and a \verb|\boxed{}| answer convention. Evaluation passes
+\texttt{-{}-apply\_chat\_template} to \texttt{lm\_eval} along with the
+training system prompt, so the two prompt formats agree. Both
+\texttt{minerva\_math} and \texttt{aime24} extract the answer from
+\verb|\boxed{}|, while \texttt{gsm8k}'s \texttt{flexible-extract} filter
+takes the last number, so the training format transfers to all three
+benchmarks without a task-specific adapter.
 
 \section{Results}
 \label{sec:results}
@@ -505,8 +510,89 @@ so it cannot report a trustworthy activation peak. Peak-memory measurement
 requires the CUDA path, which \texttt{cppo/profiling.py} uses when a CUDA
 device is present.
 
+
+\subsection{End-to-end pipeline validation}
+\label{sec:results-e2e}
+
+This is a plumbing check, not a performance claim. It exercises the whole
+pipeline --- dataset, chat template, rollout, \texttt{math\_verify} rewards,
+group-relative advantages, pruning, loss, optimiser step, profiling --- on the
+actual model and the actual training corpus, and confirms that CPPO changes
+what it is meant to change and nothing else. Apple M1 Pro, CPU, float32,
+\texttt{configs/smoke\_cpu.yaml}: $G = 4$, 32-token completions, two
+optimiser steps.
+
+The resulting run comparison is the training-performance table in
+Section~\ref{sec:results-tables}. Three things are confirmed and one is not.
+
+
+
+\paragraph{Dynamic allocation works as designed.} CPPO consumed four questions
+to GRPO's two in the same wall clock: a $2.01\times$ throughput gain against a
+predicted $m = \lfloor G/k \rfloor = 2$. Both runs took the same number of
+optimiser steps on the same update-stage micro-batch width; CPPO simply
+covered twice the data per step. Update time was essentially unchanged
+(516\,s against 526\,s) while rollout grew (28.7\,s against 21.1\,s) --- exactly
+the trade the method makes.
+
+\paragraph{Pruning retains what it claims.} The CPPO run logged
+\texttt{cppo/retention} $= 0.5$ throughout: $k = 2$ of $G = 4$ completions
+reached the policy backward pass.
+
+\paragraph{The stage split is measured, not assumed.} Rollout and update times
+partition the training step additively, produced by the same code in both runs.
+
+\paragraph{Nothing about learning is confirmed.} With 32-token completions
+Qwen3-0.6B emits no \verb|\boxed{}| answer, so every reward was zero, every
+group had zero reward variance, and every advantage was therefore zero --- the
+run logs this as \texttt{cppo/}\allowbreak\texttt{frac\_degenerate\_groups}
+$= 1$. The gradient is zero and the model does not move. That is a property of the deliberately tiny configuration, not of the
+pipeline: the unit tests in \texttt{tests/test\_trainer\_smoke.py} use a reward
+that varies within a group and assert that CPPO back-propagates through exactly
+the retained subset.
+
+\paragraph{A caution about $f$ for this run.} The update stage accounts for
+96\% of the measured step time here, which would imply a very high Amdahl
+ceiling. That figure does not generalise: on CPU a 32-token rollout is cheap
+while a float32 backward pass is extravagant. On the reference setup --- A100,
+bfloat16, vLLM rollout, 1024-token completions --- the split is far less
+update-heavy, which is exactly why Section~\ref{sec:analysis} insists that $f$
+be measured per configuration rather than assumed.
+
+\paragraph{The evaluation pipeline was exercised too.} Running
+\texttt{cppo.evaluate} against the untrained Qwen3-0.6B on five GSM8K
+problems (CPU, float32, 256 generated tokens) returns
+\texttt{exact\_match,flexible-extract} $= 0.20$ and
+\texttt{exact\_match,strict-match} $= 0.00$. Five problems say nothing about
+accuracy, but the \emph{split} between the two filters confirms a design
+decision: a policy prompted with a chat template and a \verb|\boxed{}|
+convention never emits GSM8K's \texttt{\#\#\#\#\ N} marker, so
+\texttt{strict-match} scores it zero regardless of correctness. That is why
+\texttt{cppo/evaluate.py} reports \texttt{flexible-extract} as the headline
+metric for GSM8K.
+
+\subsection{What is not measured here}
+\label{sec:results-gap}
+
+The full study --- the GRPO baseline against three CPPO pruning rates plus the
+no-allocation ablation, one epoch over 8{,}192 DAPO-Math problems each,
+followed by \texttt{lm\_eval} on all three benchmarks --- requires a CUDA GPU
+and roughly 12--18 GPU-hours. It has \emph{not} been run: the machine used for
+this report has no CUDA device. Every script needed to run it is in
+\texttt{scripts/}; \texttt{bash scripts/run\_all.sh} drives the whole sweep,
+and \texttt{python -m cppo.report} regenerates both the tables below and
+\texttt{report/generated\_tables.tex} from the resulting JSON artefacts.
+
+The numbers quoted from the CPPO paper in Section~\ref{sec:analysis} are
+labelled as such throughout and are not reproduced here. Nothing in this report
+extrapolates a measured number onto hardware it was not measured on.
+
 \subsection{Tables}
 \label{sec:results-tables}
+
+The tables below are emitted by \texttt{python -m cppo.report} from the JSON
+artefacts each run writes, so they cannot drift from the numbers quoted in the
+text. \texttt{bash scripts/run\_all.sh} regenerates them wholesale.
 
 \input{generated_tables}
 

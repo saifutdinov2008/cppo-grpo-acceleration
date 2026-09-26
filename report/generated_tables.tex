@@ -1,6 +1,15 @@
 \subsection*{Training performance}
 
-\emph{No training runs available.}
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{%
+\begin{tabular}{lrrrrrrrrrrr}
+\toprule
+Method & P & k & m & Steps & Questions & Wall clock (s) & Rollout (s) & Update (s) & Peak mem (GiB) & Questions/s & Throughput gain \\
+\midrule
+smoke-grpo & 0.00\% & 4 & 1x & 2 & 2 & 553.0 & 21.1 & 526.1 & 7.47 & 0.0036 & 1.00x \\
+smoke-cppo & 50.00\% & 2 & 2x & 2 & 4 & 550.9 & 28.7 & 516.4 & 6.99 & 0.0073 & 2.01x \\
+\bottomrule
+\end{tabular}
+}
 
 \subsection*{Downstream accuracy (lm-evaluation-harness, \% exact match)}
 
