@@ -84,7 +84,7 @@ configs/         base.yaml + one file per experiment (YAML `extends:` inheritanc
 scripts/         setup / train / evaluate / benchmark / smoke_test / run_all / lint
 benchmarks/      update_stage_benchmark.py — isolates CPPO's effect from the rollout
                  plot_results.py            — renders the report's figures
-tests/           91 unit tests + 4 end-to-end trainer tests
+tests/           93 unit tests + 4 end-to-end trainer tests
 report/          report.tex, references.bib, figures/, Makefile
 results/         JSON artefacts produced by the runs (measurements live here)
 ```
@@ -697,7 +697,7 @@ bash scripts/lint.sh
 |---|---|
 | `pylint src/cppo tests benchmarks` | **10.00/10**, zero messages |
 | `mypy` (strict, 21 source files) | **no issues** |
-| `pytest tests` | **95 passed** (91 unit + 4 end-to-end) |
+| `pytest tests` | **97 passed** (93 unit + 4 end-to-end) |
 | `shellcheck scripts/*.sh` | **clean** |
 
 `mypy` runs in `strict` mode. Third-party packages that ship `py.typed` but

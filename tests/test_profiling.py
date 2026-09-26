@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import torch
 
 from cppo.profiling import (
     ProfilingMixin,
@@ -13,6 +14,7 @@ from cppo.profiling import (
     collect_environment,
     peak_host_rss_bytes,
     peak_memory_bytes,
+    resolve_memory_backend,
 )
 
 
@@ -117,7 +119,7 @@ def test_mixin_ignores_batches_without_advantages() -> None:
 def test_report_records_where_the_memory_figure_came_from() -> None:
     """The report names its memory backend so the number can be interpreted."""
     report = _ProfiledFake().profiling_report({"run_name": "x"})
-    assert report["peak_memory_source"] in {"cuda", "mps", "host_rss"}
+    assert report["peak_memory_source"] in {"cuda", "mps", "cpu"}
     assert report["run_name"] == "x"
     assert "environment" in report and "torch" in report["environment"]
 
@@ -139,6 +141,25 @@ def test_host_rss_is_positive_and_used_as_the_cpu_fallback() -> None:
     assert peak_host_rss_bytes() > 0.0
     memory = peak_memory_bytes()
     assert memory["allocated"] >= 0.0 and memory["reserved"] >= 0.0
+
+
+def test_memory_backend_follows_the_requested_device() -> None:
+    """The trainer's device decides, not whatever the machine happens to have.
+
+    Without this, a CPU-pinned run on a Mac reports Apple MPS counters that
+    sit at zero for the whole run.
+    """
+    assert resolve_memory_backend(torch.device("cpu")) == "cpu"
+    assert resolve_memory_backend(torch.device("cuda")) == "cuda"
+    assert resolve_memory_backend(torch.device("mps")) == "mps"
+    # Probing the machine is the fallback when no device is known.
+    assert resolve_memory_backend(None) in {"cuda", "mps", "cpu"}
+
+
+def test_cpu_memory_reads_peak_host_rss() -> None:
+    """Pinned to CPU, the figures come from peak RSS rather than an accelerator."""
+    memory = peak_memory_bytes(torch.device("cpu"))
+    assert memory["allocated"] == memory["reserved"] > 0.0
 
 
 def test_environment_is_json_serialisable() -> None:
