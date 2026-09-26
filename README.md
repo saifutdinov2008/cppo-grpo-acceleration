@@ -338,8 +338,13 @@ actually thrown away, and is the mechanism behind CPPO's accuracy preservation.
 **Protocol.** Every run consumes the **same 8,192 problems in the same order**.
 Because dynamic allocation covers `m`× more questions per optimiser step, CPPO
 finishes that epoch in `m`× fewer steps. Fixing the *data* rather than the step
-count is what makes the wall-clock comparison meaningful — fixing steps instead
+count is what makes a wall-clock comparison meaningful — fixing steps instead
 would let CPPO see `m`× more data and confound speed with sample efficiency.
+
+The results table therefore reports **questions per second** as the headline
+metric rather than raw wall clock. Throughput is comparable under either
+protocol: it credits an algorithm for covering the same training data in less
+time, and never for covering more data in the same time.
 
 **Prompt/evaluation alignment.** The policy is trained with a chat template and
 a `\boxed{}` answer convention, and evaluated through `lm_eval`'s

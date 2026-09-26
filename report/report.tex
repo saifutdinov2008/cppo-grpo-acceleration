@@ -438,9 +438,14 @@ Evaluation          & \texttt{lm-evaluation-harness}~\cite{eval-harness}: \\
 \paragraph{Protocol.} Every run consumes the \emph{same 8{,}192 problems in
 the same order}. Because dynamic allocation covers $m$ times more questions
 per optimiser step, CPPO completes that epoch in $m$ times fewer steps. Fixing
-the data rather than the step count is what makes the wall-clock comparison
+the data rather than the step count is what makes a wall-clock comparison
 meaningful; fixing the step count instead would let CPPO see $m$ times more
 data and confound speed with sample efficiency.
+
+The results tables therefore report \emph{questions per second} as the
+headline metric rather than raw wall clock. Throughput is comparable under
+either protocol: it credits an algorithm for covering the same training data
+in less time, and never for covering more data in the same time.
 
 \paragraph{Prompt/evaluation alignment.} The policy is trained with a chat
 template and a \verb|\boxed{}| answer convention, and evaluated through

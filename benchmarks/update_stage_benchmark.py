@@ -196,7 +196,7 @@ def benchmark_pruning_rate(
     batch = input_ids[mask].to(device)
     batch_advantages = advantages[mask].to(device)
 
-    reset_peak_memory()
+    reset_peak_memory(device)
     durations: list[float] = []
     peak_bytes = 0.0
     peak_reserved = 0.0
@@ -209,7 +209,7 @@ def benchmark_pruning_rate(
         _synchronize(device)
         # CUDA reports a true peak; MPS only exposes an instantaneous figure,
         # so sample it every step and keep the largest reading.
-        memory = peak_memory_bytes()
+        memory = peak_memory_bytes(device)
         peak_bytes = max(peak_bytes, memory["allocated"])
         peak_reserved = max(peak_reserved, memory["reserved"])
         if index >= warmup:

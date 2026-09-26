@@ -35,18 +35,55 @@ __all__ = [
     "peak_host_rss_bytes",
     "peak_memory_bytes",
     "reset_peak_memory",
+    "resolve_memory_backend",
 ]
 
 _BYTES_PER_GIB = 1024.0**3
 
 
-def reset_peak_memory() -> None:
-    """Reset the accelerator's peak-memory counter, if it has one."""
+def _mps_available() -> bool:
+    """Return whether the Apple MPS backend is usable.
+
+    Returns:
+        ``True`` when torch was built with MPS and a device is present.
+    """
+    backend = getattr(torch.backends, "mps", None)
+    return backend is not None and bool(backend.is_available())
+
+
+def resolve_memory_backend(device: torch.device | None = None) -> str:
+    """Name the backend whose memory counters apply to a run.
+
+    The machine's *available* backends are not the right thing to look at: a
+    run pinned to CPU on a Mac would otherwise report Apple MPS counters that
+    stay at zero. When the caller knows which device the trainer is actually
+    using, that device decides.
+
+    Args:
+        device: The device the work runs on, or ``None`` to probe the machine.
+
+    Returns:
+        ``"cuda"``, ``"mps"`` or ``"cpu"``.
+    """
+    if device is not None:
+        return "cuda" if device.type == "cuda" else "mps" if device.type == "mps" else "cpu"
     if torch.cuda.is_available():
+        return "cuda"
+    return "mps" if _mps_available() else "cpu"
+
+
+def reset_peak_memory(device: torch.device | None = None) -> None:
+    """Reset the accelerator's peak-memory counter, if it has one.
+
+    Args:
+        device: The device to reset, or ``None`` to probe the machine.
+    """
+    backend = resolve_memory_backend(device)
+    if backend == "cuda":
         torch.cuda.reset_peak_memory_stats()
-    elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-        # `torch.mps` exposes no reset for the driver allocator on every
-        # version; the empty-cache call is the closest available equivalent.
+    elif backend == "mps":
+        # `torch.mps` exposes no reset for the driver allocator, so emptying
+        # the cache is the closest available equivalent.
         torch.mps.empty_cache()
 
 
@@ -64,24 +101,30 @@ def peak_host_rss_bytes() -> float:
     return usage if sys.platform == "darwin" else usage * 1024.0
 
 
-def peak_memory_bytes() -> dict[str, float]:
+def peak_memory_bytes(device: torch.device | None = None) -> dict[str, float]:
     """Return peak memory in bytes for the current process.
+
+    Args:
+        device: The device the work runs on, or ``None`` to probe the machine.
 
     Returns:
         A mapping with ``allocated`` and ``reserved`` figures. On CUDA both are
-        true peaks. On Apple MPS only instantaneous readings are exposed by the
-        backend, so callers that need a peak must sample repeatedly. Without an
-        accelerator, peak host RSS is reported instead so that CPU runs still
-        produce a meaningful memory number.
+        true peaks. On Apple MPS the backend exposes only instantaneous
+        readings, so a caller that needs a peak must sample repeatedly. On CPU
+        the process's peak resident set size is reported, which is a genuine
+        high-water mark.
     """
-    if torch.cuda.is_available():
+    backend = resolve_memory_backend(device)
+    if backend == "cuda":
         return {
             "allocated": float(torch.cuda.max_memory_allocated()),
             "reserved": float(torch.cuda.max_memory_reserved()),
         }
-    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-        driver = float(torch.mps.driver_allocated_memory())
-        return {"allocated": float(torch.mps.current_allocated_memory()), "reserved": driver}
+    if backend == "mps":
+        return {
+            "allocated": float(torch.mps.current_allocated_memory()),
+            "reserved": float(torch.mps.driver_allocated_memory()),
+        }
     rss = peak_host_rss_bytes()
     return {"allocated": rss, "reserved": rss}
 
@@ -104,19 +147,6 @@ def collect_environment() -> dict[str, Any]:
         "cuda_devices": devices,
         "world_size": int(os.environ.get("WORLD_SIZE", "1")),
     }
-
-
-def _memory_source() -> str:
-    """Name the backend the memory figures came from.
-
-    Returns:
-        ``"cuda"``, ``"mps"`` or ``"host_rss"``.
-    """
-    if torch.cuda.is_available():
-        return "cuda"
-    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
-        return "mps"
-    return "host_rss"
 
 
 @dataclass
@@ -189,7 +219,17 @@ class ProfilingMixin:
         super().__init__(*args, **kwargs)
         self.stage_timings = StageTimings()
         self._wall_clock_start: float | None = None
-        reset_peak_memory()
+        reset_peak_memory(self._memory_device())
+
+    def _memory_device(self) -> torch.device | None:
+        """Return the device the wrapped trainer actually runs on.
+
+        Returns:
+            The accelerator's device, or ``None`` if it is not available yet.
+        """
+        accelerator = getattr(self, "accelerator", None)
+        device = getattr(accelerator, "device", None)
+        return device if isinstance(device, torch.device) else None
 
     # -- TRL hooks ---------------------------------------------------------
     def _generate_and_score_completions(self, inputs: Any) -> Any:
@@ -258,7 +298,8 @@ class ProfilingMixin:
         Returns:
             A JSON-serialisable dict describing timings, memory and machine.
         """
-        memory = peak_memory_bytes()
+        device = self._memory_device()
+        memory = peak_memory_bytes(device)
         elapsed = (
             time.perf_counter() - self._wall_clock_start
             if self._wall_clock_start is not None
@@ -266,7 +307,7 @@ class ProfilingMixin:
         )
         report: dict[str, Any] = {
             "wall_clock_seconds": elapsed,
-            "peak_memory_source": _memory_source(),
+            "peak_memory_source": resolve_memory_backend(device),
             "peak_memory_allocated_gib": memory["allocated"] / _BYTES_PER_GIB,
             "peak_memory_reserved_gib": memory["reserved"] / _BYTES_PER_GIB,
             "stages": self.stage_timings.as_dict(),

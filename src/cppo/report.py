@@ -39,6 +39,7 @@ class RunSummary:
     rollout_seconds: float
     update_seconds: float
     peak_memory_gib: float
+    num_generations: int
     completions_generated: int
     completions_updated: int
     retention: float
@@ -50,6 +51,34 @@ class RunSummary:
         """Fraction of the measured training step spent in the update stage."""
         total = self.rollout_seconds + self.update_seconds
         return self.update_seconds / total if total else 0.0
+
+    @property
+    def questions_seen(self) -> int:
+        """Distinct training questions the run consumed.
+
+        Every question is answered ``num_generations`` times during the
+        rollout, so the sampled-completion count divides out to questions.
+
+        Returns:
+            The number of questions rolled out over the whole run.
+        """
+        if self.num_generations <= 0:
+            return 0
+        return self.completions_generated // self.num_generations
+
+    @property
+    def questions_per_second(self) -> float:
+        """Training questions consumed per wall-clock second.
+
+        This is the metric to compare when dynamic allocation is in play:
+        CPPO covers ``m`` times more questions per optimiser step, so a
+        wall-clock comparison at a fixed step count would credit it for doing
+        more work rather than for doing the same work faster.
+
+        Returns:
+            Questions per second, or ``0.0`` for an unmeasured run.
+        """
+        return self.questions_seen / self.wall_clock_seconds if self.wall_clock_seconds else 0.0
 
 
 def _final_reward(log_history: Iterable[dict[str, Any]]) -> float | None:
@@ -94,6 +123,7 @@ def summarize_run(
         rollout_seconds=float(stages.get("rollout_seconds", 0.0)),
         update_seconds=float(stages.get("update_seconds", 0.0)),
         peak_memory_gib=float(profile.get("peak_memory_allocated_gib", 0.0)),
+        num_generations=int(geometry.get("num_generations", 0)),
         completions_generated=int(stages.get("completions_generated", 0)),
         completions_updated=int(stages.get("completions_updated", 0)),
         retention=float(stages.get("completion_retention", 1.0)),
@@ -164,6 +194,11 @@ def _table(headers: Sequence[str], rows: Sequence[Sequence[str]], latex: bool) -
 def _performance_table(summaries: Sequence[RunSummary], latex: bool) -> str:
     """Render the training-performance comparison table.
 
+    The headline column is question throughput rather than raw wall clock.
+    Dynamic allocation changes how many questions an optimiser step covers, so
+    two runs with the same step count do not represent the same amount of
+    work; questions per second is comparable under either protocol.
+
     Args:
         summaries: Run summaries, baseline first.
         latex: Whether to emit LaTeX.
@@ -171,18 +206,20 @@ def _performance_table(summaries: Sequence[RunSummary], latex: bool) -> str:
     Returns:
         The rendered table.
     """
-    baseline = summaries[0].wall_clock_seconds if summaries else 0.0
+    baseline_throughput = summaries[0].questions_per_second if summaries else 0.0
     headers = [
         "Method",
         "P",
         "k",
         "m",
         "Steps",
+        "Questions",
         "Wall clock (s)",
         "Rollout (s)",
         "Update (s)",
         "Peak mem (GiB)",
-        "Speedup",
+        "Questions/s",
+        "Throughput gain",
     ]
     rows = [
         [
@@ -191,11 +228,17 @@ def _performance_table(summaries: Sequence[RunSummary], latex: bool) -> str:
             str(summary.num_retained),
             f"{summary.allocation_multiplier}x",
             str(summary.optimizer_steps),
+            str(summary.questions_seen),
             _fmt(summary.wall_clock_seconds, 1),
             _fmt(summary.rollout_seconds, 1),
             _fmt(summary.update_seconds, 1),
             _fmt(summary.peak_memory_gib, 2),
-            _fmt(baseline / summary.wall_clock_seconds if summary.wall_clock_seconds else None)
+            _fmt(summary.questions_per_second, 4),
+            _fmt(
+                summary.questions_per_second / baseline_throughput
+                if baseline_throughput
+                else None
+            )
             + "x",
         ]
         for summary in summaries

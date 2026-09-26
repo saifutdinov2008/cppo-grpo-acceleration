@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from cppo.report import render_tables, summarize_run
 
 
@@ -27,6 +29,7 @@ def _profile(name: str, pruning_rate: float, wall: float, reward: float) -> dict
         "peak_memory_allocated_gib": 12.5,
         "global_step": 64,
         "geometry": {
+            "num_generations": 8,
             "pruning_rate": pruning_rate,
             "num_retained": retained,
             "allocation_multiplier": max(1, 8 // retained),
@@ -61,14 +64,30 @@ def test_summarize_run_tolerates_a_missing_reward_history() -> None:
     assert summarize_run(profile).final_reward is None
 
 
-def test_markdown_tables_report_speedup_against_the_first_row() -> None:
-    """The first summary is the baseline for the speedup column."""
+def test_throughput_is_measured_in_questions_per_second() -> None:
+    """Question throughput, not wall clock, is the comparable quantity."""
+    summary = summarize_run(_profile("cppo-p75", 0.75, 100.0, 1.5))
+    # 1024 completions sampled at G = 8 is 128 questions in 100 seconds.
+    assert summary.questions_seen == 128
+    assert summary.questions_per_second == pytest.approx(1.28)
+
+
+def test_questions_per_second_is_zero_for_an_unmeasured_run() -> None:
+    """A run with no recorded wall clock does not divide by zero."""
+    profile = _profile("grpo", 0.0, 0.0, 1.0)
+    assert summarize_run(profile).questions_per_second == 0.0
+
+
+def test_markdown_tables_report_throughput_against_the_first_row() -> None:
+    """The first summary is the baseline for the throughput-gain column."""
     summaries = [
         summarize_run(_profile("grpo", 0.0, 200.0, 1.0), {"gsm8k": 40.0}),
         summarize_run(_profile("cppo-p75", 0.75, 100.0, 1.2), {"gsm8k": 41.0}),
     ]
     rendered = render_tables(summaries)
     assert "| grpo |" in rendered
+    assert "Questions/s" in rendered
+    # Same 128 questions in half the time is a 2x throughput gain.
     assert "1.00x" in rendered and "2.00x" in rendered
     assert "gsm8k" in rendered
     assert "_No update-stage benchmark available._" in rendered
