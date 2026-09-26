@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, types and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install CPU dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e ".[dev]"
+
+      - name: pylint
+        run: python -m pylint src/cppo tests benchmarks
+
+      - name: mypy (strict)
+        run: python -m mypy
+
+      # The `slow` tests download a tiny (2-layer) checkpoint from the Hub and
+      # run two real GRPO/CPPO steps on CPU; they are the end-to-end guard.
+      - name: pytest
+        run: python -m pytest tests -q
+
+      - name: Check config files resolve
+        run: |
+          for config in configs/*.yaml; do
+            case "$config" in */accelerate_zero2.yaml) continue;; esac
+            python - "$config" <<'PY'
+          import sys
+          from cppo.config import load_settings
+          from cppo.geometry import resolve_batch_geometry
+          settings = load_settings(["--config", sys.argv[1]])
+          geometry = resolve_batch_geometry(
+              base_per_device_train_batch_size=settings.per_device_train_batch_size,
+              gradient_accumulation_steps=settings.gradient_accumulation_steps,
+              num_generations=settings.num_generations,
+              pruning_rate=settings.pruning_rate,
+              dynamic_allocation=settings.dynamic_allocation,
+          )
+          print(f"{sys.argv[1]}: OK -> {geometry.as_dict()}")
+          PY
+          done
+
+  shellcheck:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck scripts/*.sh

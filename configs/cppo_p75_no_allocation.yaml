@@ -1,0 +1,8 @@
+# Ablation reproducing the paper's "+ Completion Pruning" row: completions are
+# pruned but the freed slots are NOT refilled, so each update micro-batch
+# shrinks from 16 to 4 completions and the GPU is left under-occupied.
+extends: base.yaml
+run_name: cppo-p75-no-allocation
+output_dir: outputs/cppo-p75-no-allocation
+pruning_rate: 0.75
+dynamic_allocation: false

@@ -1,0 +1,64 @@
+# Shared settings for every Qwen3-0.6B / DAPO-Math-17k experiment.
+#
+# The batching knobs below describe the GRPO *baseline*. A CPPO config only
+# sets `pruning_rate`; the pipeline derives the batch geometry from it (see
+# cppo/geometry.py), so the update stage keeps the same tensor shapes and the
+# comparison stays apples-to-apples.
+#
+# Reference hardware: 1x NVIDIA A100/H100 80GB.
+
+model_name_or_path: Qwen/Qwen3-0.6B
+torch_dtype: bfloat16
+attn_implementation: flash_attention_2
+gradient_checkpointing: true
+
+dataset_name: open-r1/DAPO-Math-17k-Processed
+dataset_config: en
+dataset_split: train
+prompt_style: boxed
+# One pass over a fixed 8k-problem subset. Both algorithms consume exactly the
+# same problems, which is what makes the wall-clock comparison meaningful.
+max_samples: 8192
+max_prompt_length: 640
+max_completion_length: 1024
+
+# Rollout: G = 8 completions per question, sampled with vLLM in the training
+# process (colocate mode) so that generation and optimisation share the GPU.
+num_generations: 8
+temperature: 1.0
+top_p: 1.0
+use_vllm: true
+vllm_mode: colocate
+vllm_gpu_memory_utilization: 0.3
+# CPPO can only prune *before* every forward pass if no forward pass precedes
+# the advantage computation. Turning the importance-sampling correction off
+# removes TRL's extra old-policy forward; see cppo/trainer.py for the details.
+vllm_importance_sampling_correction: false
+
+# Objective: KL-free (beta = 0), which is both TRL's default and the
+# approximation the CPPO paper derives its pruning criterion from (Eq. 6).
+beta: 0.0
+epsilon: 0.2
+epsilon_high: 0.28
+loss_type: dapo
+scale_rewards: group
+
+learning_rate: 1.0e-6
+lr_scheduler_type: constant_with_warmup
+warmup_steps: 10
+weight_decay: 0.0
+max_grad_norm: 0.2
+adam_beta1: 0.9
+adam_beta2: 0.99
+num_train_epochs: 1.0
+
+# Baseline update-stage shape: 16 completions per device per micro-batch,
+# 8 micro-batches per optimiser step => 128 completions = 16 questions/round.
+per_device_train_batch_size: 16
+gradient_accumulation_steps: 8
+
+logging_steps: 1
+save_steps: 0
+save_final_model: true
+report_to: []
+seed: 42

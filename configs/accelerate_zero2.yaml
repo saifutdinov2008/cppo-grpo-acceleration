@@ -1,0 +1,30 @@
+# DeepSpeed ZeRO-2 launch config for multi-GPU GRPO/CPPO training.
+#
+#   accelerate launch --config_file configs/accelerate_zero2.yaml \
+#       --num_processes 4 -m cppo.train --config configs/cppo_p75.yaml
+#
+# ZeRO-2 (not ZeRO-3) is deliberate: GRPO generates from the policy every step,
+# and ZeRO-3 would have to gather the sharded parameters for each rollout.
+# Qwen3-0.6B fits comfortably per device, so sharding the optimiser state and
+# gradients is enough.
+compute_environment: LOCAL_MACHINE
+debug: false
+deepspeed_config:
+  deepspeed_multinode_launcher: standard
+  offload_optimizer_device: none
+  offload_param_device: none
+  zero3_init_flag: false
+  zero_stage: 2
+distributed_type: DEEPSPEED
+downcast_bf16: 'no'
+machine_rank: 0
+main_training_function: main
+mixed_precision: bf16
+num_machines: 1
+num_processes: 4
+rdzv_backend: static
+same_network: true
+tpu_env: []
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false

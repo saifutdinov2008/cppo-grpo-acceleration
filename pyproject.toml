@@ -1,0 +1,114 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cppo-grpo-acceleration"
+version = "1.0.0"
+description = "GRPO and CPPO post-training pipelines for Qwen3-0.6B on DAPO-Math-17k"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Yusuf Saifutdinov" }]
+keywords = ["reinforcement-learning", "grpo", "cppo", "llm", "post-training"]
+
+dependencies = [
+  "torch>=2.4",
+  "transformers>=4.51",
+  "trl>=0.19",
+  "datasets>=3.0",
+  "accelerate>=1.0",
+  "peft>=0.13",
+  "math-verify>=0.5",
+  "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+eval = ["lm-eval>=0.4.8"]
+vllm = ["vllm>=0.8.3"]
+dev = ["pylint>=3.2", "mypy>=1.11", "pytest>=8.0", "pandas>=2.0", "tabulate>=0.9"]
+
+[project.scripts]
+cppo-train = "cppo.train:main"
+cppo-eval = "cppo.evaluate:main"
+cppo-report = "cppo.report:main"
+
+[project.urls]
+Homepage = "https://github.com/saifutdinov2008/cppo-grpo-acceleration"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+cppo = ["py.typed"]
+
+# ---------------------------------------------------------------------------
+# Static analysis
+# ---------------------------------------------------------------------------
+[tool.pylint.main]
+py-version = "3.10"
+jobs = 0
+source-roots = ["src", "."]
+ignore-paths = ["^\\.venv/.*$", "^outputs/.*$"]
+
+[tool.pylint."messages control"]
+disable = [
+  # The TRL/Transformers trainer API dictates these shapes; they are not
+  # defects in this codebase.
+  "duplicate-code",
+]
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint.design]
+max-args = 24
+max-positional-arguments = 8
+max-locals = 40
+max-attributes = 20
+max-branches = 24
+max-statements = 90
+max-public-methods = 30
+min-public-methods = 0
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "n", "G", "P", "df", "fn", "ax", "_"]
+
+[tool.mypy]
+python_version = "3.12"  # the reference environment; see requirements.txt
+files = ["src", "tests", "benchmarks"]
+strict = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+no_implicit_reexport = true
+show_error_codes = true
+pretty = true
+
+# These packages ship `py.typed` but re-export their public API through lazy
+# module `__getattr__`, which mypy cannot see as an explicit re-export.
+[[tool.mypy.overrides]]
+module = ["trl", "trl.*", "transformers", "transformers.*", "accelerate", "peft"]
+implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = [
+  "accelerate.*",
+  "datasets.*",
+  "lm_eval.*",
+  "math_verify.*",
+  "matplotlib.*",
+  "pandas.*",
+  "peft.*",
+  "transformers.*",
+  "trl.*",
+  "vllm.*",
+  "yaml.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-q --strict-markers"
+markers = ["slow: end-to-end tests that instantiate a model"]

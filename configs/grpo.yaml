@@ -1,0 +1,5 @@
+# GRPO baseline: no pruning, stock trl.GRPOTrainer.
+extends: base.yaml
+run_name: grpo-baseline
+output_dir: outputs/grpo-baseline
+pruning_rate: 0.0

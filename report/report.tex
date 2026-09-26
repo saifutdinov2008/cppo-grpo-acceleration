@@ -1,0 +1,590 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.4cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{microtype}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{caption}
+
+\definecolor{codebg}{gray}{0.96}
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  breaklines=true,
+  frame=none,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+}
+
+\newcommand{\Adv}{A}
+\newcommand{\polold}{\pi_{\theta_{\mathrm{old}}}}
+\newcommand{\polref}{\pi_{\mathrm{ref}}}
+\newcommand{\pol}{\pi_{\theta}}
+
+\title{\textbf{Accelerating GRPO Post-Training with Completion Pruning}\\
+\large An implementation and analysis of CPPO for Qwen3-0.6B on DAPO-Math-17k}
+\author{Yusuf Saifutdinov}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Group Relative Policy Optimization (GRPO) has become the workhorse of
+reasoning-oriented post-training, but it is expensive: every question is
+answered $G$ times, and every one of those $G$ completions is pushed through a
+forward and a backward pass. Completion Pruning Policy Optimization (CPPO)
+observes that a completion's contribution to the policy gradient is
+proportional to the magnitude of its group-relative advantage, and therefore
+back-propagates through only the $k = \lfloor G(1-P) \rfloor$ completions with
+the largest $|\Adv_i|$. This report presents a from-scratch implementation of
+GRPO and CPPO on top of TRL for Qwen3-0.6B trained on DAPO-Math-17k, evaluated
+with \texttt{lm-evaluation-harness} on GSM8K, Minerva MATH and AIME 2024. We
+describe both algorithms, show how CPPO's \emph{dynamic completion allocation}
+maps exactly onto TRL's batching parameters without modifying TRL, and give a
+cost model that predicts CPPO's end-to-end speedup from a single measured
+quantity: the share of training time spent in the update stage. The central
+finding is that CPPO's accuracy is essentially free --- pruning discards
+completions that carry almost none of the batch's learning signal --- but its
+\emph{speedup is bounded by Amdahl's law} on the rollout stage, so the
+published $8.32\times$ figures are reachable only in configurations where the
+update stage dominates.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction}
+\label{sec:intro}
+
+Reinforcement learning with verifiable rewards has driven most of the recent
+progress in mathematical reasoning, code generation and long-horizon
+instruction following~\cite{deepseekai2025r1,yu2025dapo}. The dominant
+algorithm family is PPO~\cite{schulman2017ppo} and its critic-free descendant
+GRPO~\cite{shao2024deepseekmath}, which replaces the learned value function
+with a baseline estimated from a \emph{group} of completions sampled for the
+same question.
+
+Removing the critic removes one model from GPU memory, but GRPO remains
+costly for three reasons:
+
+\begin{enumerate}
+  \item \textbf{Multiple models resident at once.} The policy, and --- when a
+  KL penalty is used --- a frozen reference model, plus optimiser state for
+  the policy.
+  \item \textbf{A slow autoregressive rollout.} Each optimiser step needs $G$
+  sampled completions \emph{per question}, and sampling is memory-bandwidth
+  bound rather than compute bound.
+  \item \textbf{A wide update stage.} Every one of those $G$ completions is
+  pushed through a forward and a backward pass of the policy.
+\end{enumerate}
+
+CPPO~\cite{lin2025cppo} attacks the third cost. This report answers the
+question posed by the task directly: \emph{how accurate is CPPO, and how does
+it influence RL training acceleration?} Section~\ref{sec:grpo} and
+Section~\ref{sec:cppo} describe the two algorithms,
+Section~\ref{sec:implementation} documents the implementation and the places
+where a faithful mapping onto TRL required judgement,
+Section~\ref{sec:setup}--\ref{sec:results} give the experimental protocol and
+results, and Section~\ref{sec:analysis} develops the cost model that explains
+what the numbers mean.
+
+\section{Background: GRPO}
+\label{sec:grpo}
+
+\subsection{Objective}
+
+For a question $q$ drawn from the data distribution $P(Q)$, the old policy
+$\polold$ samples a group of $G$ completions $\{o_1,\dots,o_G\}$. GRPO
+maximises
+
+\begin{equation}
+\label{eq:grpo}
+\begin{split}
+\mathcal{J}_{\mathrm{GRPO}}(\theta) =\;
+&\mathbb{E}_{q \sim P(Q),\, \{o_i\}_{i=1}^{G} \sim \polold(o \mid q)}
+\Bigg[ \frac{1}{G}\sum_{i=1}^{G} \frac{1}{|o_i|} \sum_{t=1}^{|o_i|}
+\Big\{ \min\Big( \rho_{i,t}(\theta)\, \Adv_i,\\
+&\quad \mathrm{clip}\big(\rho_{i,t}(\theta),\, 1-\epsilon,\, 1+\epsilon\big)\,
+\Adv_i \Big) - \beta\, \mathbb{D}_{\mathrm{KL}}\!\left[\pol \,\|\, \polref\right]
+\Big\} \Bigg],
+\end{split}
+\end{equation}
+
+where $\rho_{i,t}(\theta) = \pol(o_{i,t} \mid q, o_{i,<t}) / \polold(o_{i,t}
+\mid q, o_{i,<t})$ is the token-level importance ratio and the advantage is
+the group-standardised reward
+
+\begin{equation}
+\label{eq:advantage}
+\Adv_i = \frac{r_i - \mathrm{mean}(\{r_1,\dots,r_G\})}
+              {\mathrm{std}(\{r_1,\dots,r_G\})}.
+\end{equation}
+
+Crucially, $\Adv_i$ is constant across the tokens of completion $i$: the whole
+completion is weighted by one scalar.
+
+\subsection{Rule-based reward}
+
+Following the CPPO paper and common practice for verifiable domains, the
+reward is the sum of a format term and an accuracy term,
+$r_i = R_{\mathrm{format}}(o_i) + R_{\mathrm{accuracy}}(o_i)$, with
+$R_{\mathrm{format}} \in \{0,1\}$ and $R_{\mathrm{accuracy}} \in \{0,2\}$. No
+reward model is trained. Our implementation checks accuracy with
+symbolic equivalence (\texttt{math\_verify}) rather than string matching, so
+$\tfrac{1}{2}$, $0.5$ and $\backslash\mathrm{frac}\{1\}\{2\}$ all score alike.
+
+\subsection{Where the time goes}
+
+Let $B$ be the number of questions per optimiser step. A step costs
+
+\begin{equation}
+\label{eq:grpo-cost}
+T_{\mathrm{step}} \;=\; \underbrace{B \cdot G \cdot c_{\mathrm{gen}}}_{\text{rollout}}
+\;+\; \underbrace{B \cdot G \cdot \big(n_{\mathrm{fwd}}\, c_{\mathrm{fwd}} + c_{\mathrm{bwd}}\big)}_{\text{update}},
+\end{equation}
+
+where $n_{\mathrm{fwd}}$ counts the forward passes over completions: one for
+the policy, plus one for the reference model when $\beta \neq 0$, plus one for
+the old policy when the samples are off-policy. In DeepSeekMath's
+configuration with $G=64$ that is $192$ forward passes per
+question~\cite{lin2025cppo}. Both terms scale linearly in $G$, which is what
+makes larger groups --- and hence better baselines --- so expensive.
+
+\section{CPPO: Completion Pruning Policy Optimization}
+\label{sec:cppo}
+
+\subsection{Which completions actually matter}
+
+Differentiating Eq.~\eqref{eq:grpo} and dropping the KL term, which
+Hu~et~al.~\cite{hu2025openreasonerzero} show is not what shapes reasoning
+behaviour, gives
+
+\begin{equation}
+\label{eq:grad}
+\nabla_\theta \mathcal{J}(\theta) \approx \mathbb{E}\Bigg[
+\frac{1}{G}\sum_{i=1}^{G} \frac{1}{|o_i|} \sum_{t=1}^{|o_i|}
+\underbrace{\rho_{i,t}(\theta)}_{\text{post-forward}} \cdot
+\underbrace{\Adv_i}_{\text{\textbf{pre}-forward}} \cdot
+\underbrace{\nabla_\theta \log \pol(o_{i,t} \mid q, o_{i,<t})}_{\text{post-forward}}
+\Bigg].
+\end{equation}
+
+Three factors must all be non-negligible for a completion to move the policy.
+Two of them are only knowable \emph{after} the policy forward pass --- but
+$\Adv_i$ is known \emph{before} it, as soon as the group's rewards have been
+scored. That asymmetry is the entire idea: a completion whose $|\Adv_i|$ is
+near zero can be identified and discarded before any expensive computation is
+spent on it.
+
+The paper also gives an interpretation of \emph{which} completions get
+discarded. With a two-part reward, the four outcome types are:
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+Format & Answer & Typical $|\Adv|$ & Training signal \\
+\midrule
+correct   & correct   & large & ``do this'' --- clean positive signal \\
+incorrect & incorrect & large & ``avoid this'' --- clean negative signal \\
+correct   & incorrect & small & ambiguous; rewards form over substance \\
+incorrect & correct   & small & ambiguous; rewards luck over method \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Pruning by $|\Adv_i|$ therefore removes precisely the partially-correct
+completions whose gradient is both weak and semantically muddled, which is why
+CPPO can \emph{improve} accuracy rather than merely preserve it.
+
+\subsection{The pruned objective}
+
+CPPO adds a selection constraint to Eq.~\eqref{eq:grpo}. To keep every data-parallel
+device processing an identical number of completions --- otherwise the slowest
+device sets the pace, the ``bucket effect'' --- the constraint is expressed as
+a per-group top-$k$ rather than a global threshold:
+
+\begin{equation}
+\label{eq:k}
+k = \lfloor G \cdot (1 - P) \rfloor, \qquad P \in [0,1),
+\end{equation}
+\begin{equation}
+\label{eq:index-set}
+\mathcal{I} = \big\{\, i \in \{1,\dots,G\} \;\big|\; |\Adv_i| \text{ is among the top } k \text{ values} \,\big\},
+\end{equation}
+\begin{equation}
+\label{eq:cppo}
+\begin{split}
+\mathcal{J}_{\mathrm{CPPO}}(\theta) =\;
+&\mathbb{E}_{q,\{o_i\}} \Bigg[ \frac{1}{k}\sum_{i \in \mathcal{I}} \frac{1}{|o_i|}
+\sum_{t=1}^{|o_i|} \Big\{ \min\Big( \rho_{i,t}(\theta)\, \Adv_i,\\
+&\quad \mathrm{clip}\big(\rho_{i,t}(\theta), 1-\epsilon, 1+\epsilon\big)\, \Adv_i \Big)
+- \beta\, \mathbb{D}_{\mathrm{KL}}\!\left[\pol \,\|\, \polref\right] \Big\} \Bigg].
+\end{split}
+\end{equation}
+
+Note the normaliser: $1/k$, not $1/G$. Pruning must not shrink the gradient
+magnitude, or it would silently act as a learning-rate decay.
+
+\subsection{Dynamic completion allocation}
+
+Pruning leaves $G-k$ completion slots empty in the update stage, so the
+accelerator runs at a fraction of its capacity. CPPO refills those slots with
+completions sampled for \emph{additional} questions. Per generation round the
+device then handles
+
+\begin{equation}
+\label{eq:allocation}
+m = \left\lfloor G / k \right\rfloor
+\end{equation}
+
+times as many questions, each still contributing $k$ retained completions, so
+the post-pruning batch is again the full width the hardware can hold. Total
+rollout work over an epoch is unchanged --- the same questions are still
+answered $G$ times --- but the epoch now needs $m$ times fewer optimiser
+steps, and each of those steps is as wide as the baseline's.
+
+\subsection{Algorithm}
+
+\begin{algorithm}[t]
+\caption{CPPO training step (with dynamic completion allocation)}
+\label{alg:cppo}
+\SetAlgoLined
+\KwIn{policy $\pol$, group size $G$, pruning rate $P$, questions per round $B$,
+      reward function $r(\cdot)$}
+$k \leftarrow \lfloor G(1-P) \rfloor$; \quad $m \leftarrow \lfloor G/k \rfloor$\;
+\For{each generation round}{
+  Sample $m \cdot B$ questions $\{q_j\}$ \tcp*{allocation: $m\times$ more questions}
+  \ForEach{question $q_j$}{
+    Sample $G$ completions $\{o_{j,1},\dots,o_{j,G}\} \sim \polold(\cdot \mid q_j)$\;
+    Score rewards $r_{j,i} \leftarrow R_{\mathrm{format}}(o_{j,i}) + R_{\mathrm{accuracy}}(o_{j,i})$\;
+    $\Adv_{j,i} \leftarrow (r_{j,i} - \mathrm{mean}_i r_{j,\cdot}) / \mathrm{std}_i\, r_{j,\cdot}$
+      \tcp*{pre-forward information}
+    $\mathcal{I}_j \leftarrow \mathrm{top}\text{-}k\big(\{|\Adv_{j,i}|\}_{i=1}^{G}\big)$
+      \tcp*{\textbf{pruning}}
+  }
+  $\mathcal{B} \leftarrow \bigcup_j \{ o_{j,i} : i \in \mathcal{I}_j \}$
+    \tcp*{$m \cdot B \cdot k \approx B \cdot G$ completions}
+  \ForEach{micro-batch of $\mathcal{B}$}{
+    Forward and backward $\pol$ on the micro-batch only; accumulate gradients\;
+  }
+  Optimiser step\;
+}
+\end{algorithm}
+
+Steps 1--3 of the loop are identical to GRPO. The only changes are the
+top-$k$ selection and the $m$-fold widening of the question batch.
+
+\section{Implementation}
+\label{sec:implementation}
+
+The implementation is a small package layered on TRL~\cite{vonwerra2020trl}
+rather than a fork of it, so the GRPO baseline is provably stock TRL:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Module & Responsibility \\
+\midrule
+\texttt{cppo/pruning.py}   & Top-$k$ selection by $|\Adv|$; pruning diagnostics \\
+\texttt{cppo/geometry.py}  & Pruning rate $\rightarrow$ TRL batch parameters \\
+\texttt{cppo/trainer.py}   & \texttt{ProfiledGRPOTrainer}, \texttt{CPPOTrainer} \\
+\texttt{cppo/profiling.py} & Stage timing and peak-memory tracking (shared) \\
+\texttt{cppo/rewards.py}   & Format and accuracy rewards \\
+\texttt{cppo/data.py}      & DAPO-Math-17k loading and prompt templating \\
+\texttt{cppo/train.py}     & Training entry point \\
+\texttt{cppo/evaluate.py}  & \texttt{lm-evaluation-harness} wrapper \\
+\texttt{cppo/report.py}    & Renders result tables for this document \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Selection}
+
+The retention mask is built per group with a \emph{stable} descending sort of
+$|\Adv|$, so ties resolve to the lowest index and every data-parallel rank
+selects the same completions from the same advantages without communicating.
+Keeping exactly $k$ per group --- rather than thresholding $|\Adv_i| \ge
+\gamma$ --- is what makes the retained count identical on every device, which
+is the requirement Eq.~\eqref{eq:k} exists to satisfy.
+
+\subsection{Mapping dynamic allocation onto TRL}
+\label{sec:geometry}
+
+TRL derives its rollout batch from three knobs:
+\[
+\begin{aligned}
+\texttt{generation\_batch\_size} = \;&\texttt{per\_device\_train\_batch\_size}\\
+\times\;&\texttt{num\_processes} \times \texttt{steps\_per\_generation},
+\end{aligned}
+\]
+samples $\texttt{generation\_batch\_size} / G$ distinct questions per round,
+and splits the result into \texttt{steps\_per\_generation} optimiser
+micro-batches.
+
+The useful observation is that dynamic completion allocation requires
+\emph{no changes to TRL's batching code at all}. Multiplying
+\texttt{per\_device\_train\_batch\_size} by $m$ makes TRL sample $m$ times
+more questions per round; pruning then shrinks each micro-batch back to
+exactly the baseline width. Concretely, for the configuration used here
+($G=8$, baseline micro-batch $16$, $\texttt{steps\_per\_generation}=8$):
+
+\begin{center}
+\begin{tabular}{lrrrrr}
+\toprule
+Run & $P$ & $k$ & $m$ & Questions/round & Update micro-batch \\
+\midrule
+GRPO baseline          & 0.000 & 8 & 1 & 16  & 16 \\
+CPPO $P=0.50$          & 0.500 & 4 & 2 & 32  & 16 \\
+CPPO $P=0.75$          & 0.750 & 2 & 4 & 64  & 16 \\
+CPPO $P=0.875$         & 0.875 & 1 & 8 & 128 & 16 \\
+CPPO $P=0.75$, no alloc.& 0.750 & 2 & 1 & 16  & \phantom{0}4 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The update stage therefore sees identical tensor shapes in every allocated
+configuration --- identical memory, identical kernel occupancy --- while
+covering $m$ times more questions per optimiser step. The last row is the
+paper's ``+ Completion Pruning'' ablation: pruning without refilling, which
+leaves three quarters of the batch empty.
+
+\subsection{Where pruning is applied, and why}
+\label{sec:pruning-point}
+
+The CPPO paper prunes before the policy, reference \emph{and} old-policy
+forward passes. TRL computes rewards --- and hence advantages --- \emph{after}
+the reference and old-policy log-probabilities, so a literal ``prune first''
+ordering would require reimplementing a 600-line private method against
+internal TRL state, which is both fragile across versions and hard to audit.
+
+Instead this implementation prunes at the end of the rollout, immediately
+before the policy forward/backward pass, and adopts a configuration in which
+the auxiliary passes \emph{do not exist}:
+
+\begin{itemize}
+  \item $\beta = 0$: no reference model, so no reference forward pass. This is
+  TRL's own default, matches Dr.~GRPO's recommendation~\cite{liu2025drgrpo},
+  and is exactly the KL-free approximation from which CPPO derives its pruning
+  criterion in Eq.~\eqref{eq:grad}. It also removes a whole model from GPU
+  memory.
+  \item $\mu = 1$ iteration with generation aligned to the optimiser step: the
+  samples are on-policy, so TRL skips the old-policy forward pass.
+  \item vLLM importance-sampling correction disabled: otherwise TRL recomputes
+  old-policy log-probabilities to correct the sampler/trainer mismatch.
+\end{itemize}
+
+Under these settings the only pass over completions is the policy's, and
+pruning before it reproduces Eq.~\eqref{eq:cppo} exactly. When a user
+overrides them, \texttt{CPPOTrainer} emits a warning naming each unpruned
+forward pass: training remains correct, but the measured speedup becomes a
+lower bound. Making that trade-off explicit --- rather than silently reporting
+a smaller number --- is the point.
+
+\subsection{Correctness details that are easy to get wrong}
+
+\paragraph{Loss normalisation.} TRL's default \texttt{dapo} loss divides by
+\texttt{num\_items\_in\_batch}, the count of loss-carrying tokens in the whole
+generation batch. Pruning removes tokens; leaving the pre-pruning count in
+place would scale the loss --- and therefore the effective learning rate --- by
+$k/G$. The trainer recomputes the normaliser over the retained completions.
+This is the implementation-level counterpart of the $1/k$ in
+Eq.~\eqref{eq:cppo}.
+
+\paragraph{Group locality.} Pruning is per question, so a group must live
+entirely on one device. The trainer validates that the local generation batch
+is a whole multiple of $G$ and fails loudly otherwise, rather than silently
+pruning across a group boundary.
+
+\paragraph{Degenerate groups.} When all $G$ completions of a question receive
+the same reward, the standard deviation is zero and every advantage is zero:
+the group contributes no gradient whatsoever, yet still costs a full forward
+and backward pass. The trainer logs the fraction of such groups, and offers an
+optional \texttt{drop\_zero\_advantage} mode that removes them outright. That
+mode is exact only when $\beta = 0$ and, because it makes the retained count
+data-dependent, is restricted to single-process runs --- unequal batch sizes
+across ranks would deadlock a collective operation.
+
+\section{Experimental setup}
+\label{sec:setup}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Policy model        & Qwen3-0.6B~\cite{qwen3} \\
+Training data       & \texttt{open-r1/DAPO-Math-17k-Processed} (config \texttt{en}) \\
+Training subset     & 8{,}192 problems, one epoch \\
+Reward              & format ($\{0,1\}$) $+$ accuracy ($\{0,2\}$, \texttt{math\_verify}) \\
+Prompt              & chat template, ``reason step by step, answer in \verb|\boxed{}|'' \\
+Group size $G$      & 8 \\
+Max completion len. & 1024 tokens \\
+Sampling            & temperature 1.0, top-$p$ 1.0 \\
+Objective           & \texttt{dapo} loss, $\epsilon = 0.2$, $\epsilon_{\mathrm{high}} = 0.28$, $\beta = 0$ \\
+Optimiser           & AdamW, lr $10^{-6}$, constant with 10 warmup steps, grad-clip 0.2 \\
+Rollout backend     & vLLM~\cite{kwon2023vllm}, colocate mode \\
+Evaluation          & \texttt{lm-evaluation-harness}~\cite{eval-harness}: \\
+                    & \quad \texttt{gsm8k} (5-shot), \texttt{minerva\_math} (4-shot), \texttt{aime24} (0-shot) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\paragraph{Protocol.} Every run consumes the \emph{same 8{,}192 problems in
+the same order}. Because dynamic allocation covers $m$ times more questions
+per optimiser step, CPPO completes that epoch in $m$ times fewer steps. Fixing
+the data rather than the step count is what makes the wall-clock comparison
+meaningful; fixing the step count instead would let CPPO see $m$ times more
+data and confound speed with sample efficiency.
+
+\paragraph{Prompt/evaluation alignment.} The policy is trained with a chat
+template and a \verb|\boxed{}| answer convention, and evaluated through
+\texttt{lm\_eval}'s \texttt{-{}-apply\_chat\_template} flag with the same
+system prompt. \texttt{minerva\_math} and \texttt{aime24} extract from
+\verb|\boxed{}|, and \texttt{gsm8k}'s \texttt{flexible-extract} filter takes
+the last number, so the training format transfers to all three benchmarks
+without a task-specific adapter.
+
+\section{Results}
+\label{sec:results}
+
+\input{generated_tables}
+
+\section{Analysis}
+\label{sec:analysis}
+
+\subsection{A cost model for CPPO's speedup}
+
+CPPO changes the update stage and leaves the rollout stage untouched. Let $f$
+be the fraction of baseline training time spent in the update stage. Update
+work scales with the number of completions back-propagated, i.e. by $k/G =
+1-P$. The achievable end-to-end speedup is then bounded by Amdahl's law:
+
+\begin{equation}
+\label{eq:amdahl}
+S(P) \;=\; \frac{1}{(1-f) + f\,(1-P)}, \qquad
+S_{\max} \;=\; \lim_{P \to 1} S(P) \;=\; \frac{1}{1-f}.
+\end{equation}
+
+This single equation explains the spread in the published numbers. The
+important consequences are:
+
+\begin{itemize}
+  \item \textbf{The rollout is the ceiling.} If generation is 50\% of training
+  time, no pruning rate can exceed $2\times$ overall, however aggressive.
+  \item \textbf{CPPO pays off most where the update stage is fattest}: large
+  $G$, long completions, a KL penalty that adds a reference forward pass, or
+  multiple inner iterations $\mu > 1$. The paper's $8.32\times$ on GSM8K
+  implies $f \approx 0.88$, consistent with its $\beta = 0.04$ configuration
+  in which every completion also pays a reference-model forward pass.
+  \item \textbf{Our configuration is deliberately less favourable to CPPO.}
+  With $\beta = 0$, $\mu = 1$ and a vLLM rollout, the update stage is a single
+  forward plus a backward, and $f$ is correspondingly smaller. The honest
+  reading is that the configuration that is best for CPPO's \emph{relative}
+  numbers is not the configuration that is best in absolute terms.
+  \item \textbf{The rollout is not immune in principle.} Nothing in the
+  rollout depends on advantages, which do not exist until sampling has
+  finished, so completion pruning cannot shrink it. Reducing rollout cost
+  needs an orthogonal method --- speculative or truncated sampling, early
+  stopping of degenerate groups, or reusing completions across steps.
+\end{itemize}
+
+Because $f$ is measured directly by the profiling mixin (both stages are
+timed with the same code in both runs, and are additive by construction),
+Eq.~\eqref{eq:amdahl} turns into a falsifiable prediction that the reported
+tables can be checked against.
+
+\subsection{Why accuracy survives}
+
+The pruning diagnostics logged each step (\texttt{cppo/retained\_signal\_fraction})
+report the share of the batch's total $|\Adv|$ mass that survives pruning.
+Because group-standardised rewards from a two-part reward function are
+strongly bimodal, that share stays close to $1$ even at $P = 0.75$: the
+discarded completions are numerous but individually almost weightless. This is
+the quantitative statement behind the qualitative table in
+Section~\ref{sec:cppo}, and it is the mechanism by which CPPO preserves --- and
+in the paper's experiments sometimes improves --- accuracy.
+
+The paper's own metric ablation supports the criterion rather than the mere
+act of subsetting: keeping the \emph{largest} $|\Adv|$ scores $77.67\%$ on
+GSM8K, random subsetting $76.98\%$, and keeping the \emph{smallest}
+$74.23\%$. Pruning by raw (signed) advantage rather than absolute advantage is
+also worse, confirming that large-negative completions --- ``do not do this''
+--- are as informative as large-positive ones.
+
+There is a floor, however. At $P = 0.9375$ ($k=1$) the paper's accuracy drops
+on both GSM8K and MATH: with a single retained completion the surviving
+gradient is a single-sample estimate, and genuinely useful completions start
+being discarded alongside the weightless ones. $P \in [0.5, 0.875]$ is the
+usable band.
+
+\subsection{Memory}
+
+Completion pruning does not reduce \emph{peak} memory on its own, and with
+dynamic allocation it is designed not to: the whole point of refilling the
+freed slots is to keep the update-stage tensors at the width the device can
+hold. What CPPO buys is throughput at constant memory, not a smaller
+footprint. The memory saving in this pipeline comes from a different decision
+--- $\beta = 0$ removes the reference model entirely --- and the
+\texttt{no\_allocation} ablation is the configuration in which pruning does
+lower peak memory, at the cost of leaving the device under-occupied.
+
+\section{Limitations and reproducibility}
+\label{sec:limitations}
+
+\paragraph{What was measured where.} The tables in
+Section~\ref{sec:results} are generated by \texttt{cppo.report} from the JSON
+artefacts each run writes; the README states, for each table, the hardware it
+was produced on. Where a table was produced on a laptop-class accelerator
+rather than the reference A100/H100, that is recorded explicitly rather than
+extrapolated. All scripts needed to reproduce the full study on a single
+80\,GB GPU are in \texttt{scripts/}.
+
+\paragraph{Known gaps.}
+\begin{itemize}
+  \item Pruning happens after the rollout rather than before the auxiliary
+  forward passes (Section~\ref{sec:pruning-point}). With the recommended
+  $\beta = 0$, $\mu = 1$ configuration this is exact; otherwise the reported
+  speedup understates CPPO.
+  \item Qwen3-0.6B is small enough that a single optimiser step is dominated
+  by fixed overheads that a 7B model would amortise, so $f$ --- and therefore
+  the achievable speedup --- is smaller here than it would be at scale.
+  \item \texttt{aime24} has 30 problems; a single problem is $3.3$ points.
+  Differences on that benchmark should not be read as significant without
+  multiple seeds.
+  \item Single seed per configuration. GRPO runs are noisy; the accuracy
+  column should be read as ``no regression'' evidence rather than as a precise
+  ranking.
+\end{itemize}
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+CPPO is a well-targeted optimisation with an unusually clean justification:
+the factor of the policy gradient that is knowable before the expensive
+computation is exactly the factor that decides whether the computation is
+worth doing. Its accuracy cost is close to zero in the $P \in [0.5, 0.875]$
+band, because group-standardised rewards concentrate the learning signal in a
+small minority of completions, and its dynamic allocation strategy maps onto
+TRL's batching model without touching TRL.
+
+Its acceleration, however, is bounded by what it does not touch. Completion
+pruning is an update-stage method, and Eq.~\eqref{eq:amdahl} makes the ceiling
+explicit: $1/(1-f)$, where $f$ is the update stage's share of training time.
+Reported speedups of $8\times$ describe configurations where $f \approx 0.9$
+--- large groups, a reference model, long completions. In a modern KL-free
+configuration with a vLLM rollout, $f$ is smaller and so is the payoff. The
+practical recommendation that follows is to adopt CPPO at $P \approx 0.75$
+--- it is nearly free and never hurt accuracy in our band --- and to pair it
+with a rollout-stage method, because after CPPO the rollout is where all the
+remaining time is.
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

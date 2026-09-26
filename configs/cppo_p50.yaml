@@ -1,0 +1,8 @@
+# CPPO with pruning rate P = 0.50  ->  k = floor(G * (1 - P)) = 4 of G = 8.
+# Dynamic completion allocation raises the per-device batch by m = G // k = 2,
+# so the post-pruning update micro-batch is again 16 completions.
+extends: base.yaml
+run_name: cppo-p50
+output_dir: outputs/cppo-p50
+pruning_rate: 0.50
+dynamic_allocation: true

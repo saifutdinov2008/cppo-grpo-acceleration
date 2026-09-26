@@ -1,0 +1,20 @@
+# Tiny end-to-end run used to validate the pipeline without a GPU.
+# Real Qwen3-0.6B, real DAPO-Math-17k problems, real rewards -- just very few
+# of them and very short completions. Expect a few minutes on a laptop CPU.
+extends: base.yaml
+run_name: smoke-cpu
+output_dir: outputs/smoke-cpu
+use_cpu: true
+torch_dtype: float32
+attn_implementation: null
+gradient_checkpointing: false
+use_vllm: false
+max_samples: 32
+max_completion_length: 32
+num_generations: 4
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 2
+max_steps: 2
+num_train_epochs: 1.0
+save_final_model: false
+logging_steps: 1
