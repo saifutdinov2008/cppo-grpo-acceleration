@@ -79,3 +79,28 @@ def test_summary_handles_unknown_tasks_and_empty_payloads() -> None:
     assert not summarize_results({})
     # A task exposing no accuracy-shaped metric contributes no row at all.
     assert not summarize_results({"results": {"weird": {"stderr,none": 0.01}}})
+
+
+def test_group_subtasks_are_collapsed_into_their_parent() -> None:
+    """`lm_eval` reports a group and its members; only the group is kept.
+
+    Without this, three benchmarks produce a twelve-column accuracy table.
+    """
+    results: dict[str, Any] = {
+        "results": {
+            "minerva_math": {"exact_match,none": 0.28},
+            "minerva_math_algebra": {"exact_match,none": 0.30},
+            "minerva_math_precalc": {"exact_match,none": 0.10},
+            "gsm8k": {"exact_match,flexible-extract": 0.41},
+            "aime24": {"exact_match,none": 0.0},
+        }
+    }
+    summary = summarize_results(results)
+    assert sorted(summary) == ["aime24", "gsm8k", "minerva_math"]
+    assert summary["minerva_math"] == pytest.approx(28.0)
+
+
+def test_unrelated_tasks_sharing_a_prefix_word_are_kept() -> None:
+    """Only a true `parent_child` relationship collapses, not similar names."""
+    results = {"results": {"gsm8k": {"acc,none": 0.5}, "gsm8kplus": {"acc,none": 0.4}}}
+    assert sorted(summarize_results(results)) == ["gsm8k", "gsm8kplus"]

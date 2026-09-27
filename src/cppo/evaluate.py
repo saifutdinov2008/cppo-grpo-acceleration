@@ -110,7 +110,8 @@ def summarize_results(results: dict[str, Any]) -> dict[str, float]:
         results: The dict returned by ``lm_eval.simple_evaluate``.
 
     Returns:
-        A mapping from task id to accuracy in percent, sorted by task id.
+        A mapping from task id to accuracy in percent, sorted by task id, with
+        group subtasks collapsed into their parent group.
     """
     summary: dict[str, float] = {}
     for task, metrics in sorted(results.get("results", {}).items()):
@@ -130,7 +131,16 @@ def summarize_results(results: dict[str, Any]) -> dict[str, float]:
                     break
         if chosen is not None:
             summary[task] = 100.0 * chosen
-    return summary
+
+    # `lm_eval` reports a group (minerva_math) alongside each of its member
+    # subtasks (minerva_math_algebra, ...). Reporting both makes a twelve-column
+    # table out of three benchmarks, so keep the group and drop its children.
+    names = set(summary)
+    return {
+        task: value
+        for task, value in summary.items()
+        if not any(task.startswith(f"{parent}_") for parent in names if parent != task)
+    }
 
 
 def run_evaluation(
