@@ -38,19 +38,30 @@ On [runpod.io](https://runpod.io) → **Pods** → **Deploy**:
 |---|---|
 | GPU | 1 × A100 80GB (Secure Cloud is steadier than Community for a long run) |
 | Template | **RunPod PyTorch** (any CUDA 12.x PyTorch image) |
-| Container disk | 20 GB |
+| **Container disk** | **40 GB** (RunPod's own minimum for this template is 30) |
 | **Volume disk** | **60 GB**, mounted at `/workspace` |
 | Ports | leave the SSH default |
 
-60 GB is not padding: vLLM and torch wheels are several GB, the five
-checkpoints are ~1.2 GB each, and the `lm_eval` datasets add a few more.
-Running out of disk at hour six is the most annoying way to lose a run.
+Both disks matter, and they are different things.
+
+The **container disk** holds the pip environment and is *erased when the pod
+stops*. The default 20 GB is not enough: vLLM and its dependencies are
+12-15 GB, the Hub cache another ~3 GB, and the five checkpoints ~6 GB. At
+$0.003/hour the extra 20 GB costs about two cents for the whole run.
+
+The **volume** is what survives a stop, and RunPod will warn you
+("Nothing mounted at the template's path") if you forget it. Without one,
+`/workspace` is just a directory on the container disk and everything is lost
+when the pod stops. Volume storage is around $0.10/GB/month, pro-rated — under
+$0.25 for a day.
 
 ## 3. Set up, then validate before you spend anything
 
 SSH in (RunPod shows the command under **Connect**), then:
 
 ```bash
+export HF_HOME=/workspace/hf-cache      # keep the cache on the volume
+
 cd /workspace
 git clone https://github.com/saifutdinov2008/cppo-grpo-acceleration.git
 cd cppo-grpo-acceleration
@@ -62,6 +73,15 @@ CPPO_NO_VENV=1 bash scripts/setup.sh --with-vllm
 # Optional but recommended: avoids Hub rate limits on the dataset downloads.
 export HF_TOKEN=hf_...
 ```
+
+Keep the Hub cache on the persistent volume, so stopping the pod does not
+throw away the model and the evaluation datasets:
+
+```bash
+export HF_HOME=/workspace/hf-cache
+```
+
+Set that **before** running setup, and re-export it in any new shell.
 
 Now the important step:
 
@@ -187,9 +207,10 @@ bash scripts/train.sh configs/grpo.yaml --no-use-vllm
 
 **Hub rate limits / 429s.** Set `HF_TOKEN`.
 
-**Disk full.** `du -sh ~/.cache/huggingface outputs` — the checkpoints and the
-Hub cache are the culprits. `--no-save-final-model` on runs you do not intend
-to evaluate.
+**Disk full.** `df -h /` and `du -sh "$HF_HOME" outputs` — the checkpoints and
+the Hub cache are the culprits. Confirm `HF_HOME` points at the volume rather
+than the container disk, and pass `--no-save-final-model` on any run you do not
+intend to evaluate.
 
 **`flash_attention_2` errors.** The configs default to `sdpa`, which needs no
 build step. Only pass `--attn-implementation flash_attention_2` after
