@@ -81,7 +81,8 @@ src/cppo/
   evaluate.py    lm-evaluation-harness wrapper   (`python -m cppo.evaluate`)
   report.py      Renders result tables           (`python -m cppo.report`)
 configs/         base.yaml + one file per experiment (YAML `extends:` inheritance)
-scripts/         setup / train / evaluate / benchmark / smoke_test / run_all / lint
+scripts/         setup / preflight / train / evaluate / benchmark / smoke_test / run_all / lint
+docs/RUNBOOK.md  rented-GPU walkthrough for the full study
 benchmarks/      update_stage_benchmark.py — isolates CPPO's effect from the rollout
                  plot_results.py            — renders the report's figures
 tests/           93 unit tests + 4 end-to-end trainer tests
@@ -642,15 +643,21 @@ number onto hardware it was not measured on.
 
 ## 9. Reproducing the study
 
+> **Running the full study on a rented GPU?** Follow
+> **[`docs/RUNBOOK.md`](docs/RUNBOOK.md)** — GPU choice, RunPod setup, expected
+> per-stage timings, result collection and troubleshooting. Budget ~6-8 h and
+> ~$10-15 on an A100 80GB.
+
 | Script | What it does |
 |---|---|
-| `scripts/setup.sh` | create `.venv`, install everything (`--with-vllm` on CUDA) |
+| `scripts/setup.sh` | create `.venv`, install everything (`--with-vllm` on CUDA; `CPPO_NO_VENV=1` to use a cloud image's existing torch) |
+| `scripts/preflight.sh` | **run first on a GPU box**: validates the whole CUDA/vLLM path in ~5 min |
 | `scripts/smoke_test.sh` | lint + types + tests + 2 real GRPO/CPPO steps on CPU |
 | `scripts/train.sh <config>` | train one configuration (`NUM_GPUS>1` → `accelerate` + ZeRO-2) |
 | `scripts/evaluate.sh <model> <out.json>` | `lm_eval` on gsm8k, minerva_math, aime24 |
 | `scripts/benchmark_update_stage.sh [device]` | isolate the update stage from the rollout |
 | `python benchmarks/plot_results.py` | render the report's figures from a benchmark JSON |
-| `scripts/run_all.sh` | the full study: train + evaluate + benchmark + tables |
+| `scripts/run_all.sh` | the full study: train + evaluate + benchmark + tables (resumable, logs to `results/logs/`) |
 | `scripts/lint.sh` | pylint, mypy and pytest |
 
 Configs use YAML inheritance (`extends: base.yaml`), so an experiment file only
@@ -741,6 +748,12 @@ The test suite covers:
   are not significant without multiple seeds.
 - **Single seed per configuration.** GRPO is noisy; read the accuracy column as
   "no regression" evidence rather than a precise ranking.
+- **Gradient checkpointing is on throughout**, which inflates the update stage
+  by roughly a third and so raises the measured `f`. This *flatters* CPPO — the
+  same sweep without checkpointing would show a lower end-to-end speedup. It is
+  held identical across runs so the comparison is fair, but the absolute number
+  is specific to that choice. This is exactly why §7.1 states the ceiling in
+  terms of a measured `f` rather than a constant.
 - **Hardware provenance.** Each results table records the hardware it was
   produced on. Numbers are never extrapolated across devices.
 

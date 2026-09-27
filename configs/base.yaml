@@ -9,7 +9,11 @@
 
 model_name_or_path: Qwen/Qwen3-0.6B
 torch_dtype: bfloat16
-attn_implementation: flash_attention_2
+# SDPA is the default because it needs no extra build step and works on every
+# CUDA generation. flash_attention_2 is ~10-15% faster on the update stage but
+# requires `pip install flash-attn --no-build-isolation` (Ampere or newer);
+# pass --attn-implementation flash_attention_2 once it is installed.
+attn_implementation: sdpa
 gradient_checkpointing: true
 
 dataset_name: open-r1/DAPO-Math-17k-Processed

@@ -772,6 +772,13 @@ extrapolated. All scripts needed to reproduce the full study on a single
   \item Single seed per configuration. GRPO runs are noisy; the accuracy
   column should be read as ``no regression'' evidence rather than as a precise
   ranking.
+  \item Gradient checkpointing is enabled throughout, which inflates the
+  update stage by roughly a third and therefore raises the measured $f$. This
+  flatters CPPO: the same sweep with checkpointing disabled would show a lower
+  end-to-end speedup. The setting is held identical across every run, so the
+  comparison is fair, but the absolute speedup is specific to that choice ---
+  which is the point of Eq.~\eqref{eq:amdahl} being stated in terms of a
+  measured $f$ rather than a constant.
 \end{itemize}
 
 \section{Conclusion}

@@ -7,6 +7,12 @@
 # generation backend and to evaluate with lm-evaluation-harness. Pass
 # --with-vllm on a CUDA machine to also install vLLM, which the reference
 # configs use for the rollout stage.
+#
+# On a cloud image that already ships a CUDA build of torch (RunPod, Lambda,
+# Colab), set CPPO_NO_VENV=1 to install into the existing environment instead
+# of building a virtualenv, which would re-download several GB of torch:
+#
+#   CPPO_NO_VENV=1 bash scripts/setup.sh --with-vllm
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,13 +21,16 @@ cd "$REPO_ROOT"
 PYTHON="${PYTHON:-python3}"
 VENV="${VENV:-.venv}"
 
-if [[ ! -d "$VENV" ]]; then
-  echo ">> Creating virtual environment in $VENV"
-  "$PYTHON" -m venv "$VENV"
+if [[ "${CPPO_NO_VENV:-0}" == "1" ]]; then
+  echo ">> Installing into the current environment (CPPO_NO_VENV=1)"
+else
+  if [[ ! -d "$VENV" ]]; then
+    echo ">> Creating virtual environment in $VENV"
+    "$PYTHON" -m venv "$VENV"
+  fi
+  # shellcheck disable=SC1091
+  source "$VENV/bin/activate"
 fi
-
-# shellcheck disable=SC1091
-source "$VENV/bin/activate"
 
 echo ">> Upgrading build tooling"
 python -m pip install --upgrade pip setuptools wheel
@@ -43,4 +52,8 @@ print(f"trl          {trl.__version__}")
 print(f"cuda         {torch.cuda.is_available()} ({torch.cuda.device_count()} device(s))")
 PY
 
-echo ">> Done. Activate with: source $VENV/bin/activate"
+if [[ "${CPPO_NO_VENV:-0}" == "1" ]]; then
+  echo ">> Done. Next: bash scripts/preflight.sh"
+else
+  echo ">> Done. Activate with: source $VENV/bin/activate"
+fi
