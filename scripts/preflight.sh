@@ -7,7 +7,7 @@
 #   1. environment and VRAM report
 #   2. GRPO for 2 steps with the vLLM rollout
 #   3. CPPO for 2 steps with the vLLM rollout
-#   4. lm_eval on 8 GSM8K documents through the vLLM backend
+#   4. every lm_eval task the sweep uses, on a couple of documents each
 #   5. table rendering
 #
 # If this passes, `bash scripts/run_all.sh` will not fail on plumbing. If it
@@ -42,6 +42,22 @@ python -c "import vllm; print(f'vllm           {vllm.__version__}')" \
   || { echo "vLLM missing: bash scripts/setup.sh --with-vllm"; exit 1; }
 python -c "import lm_eval; print(f'lm_eval        {lm_eval.__version__}')"
 
+# Import every task module the sweep will load. `minerva_math` asserts a
+# specific antlr4 runtime at import time, and that assertion would otherwise
+# fire only once evaluation starts -- after the training runs have completed.
+python - <<'PY'
+from importlib.metadata import version
+import importlib
+
+print(f"antlr4         {version('antlr4-python3-runtime')}")
+for module in ("lm_eval.tasks.minerva_math.utils", "lm_eval.tasks.aime.utils"):
+    importlib.import_module(module)
+    print(f"task module    {module} OK")
+from math_verify import parse, verify
+assert verify(parse("$1/2$"), parse("0.5"))
+print("math_verify    OK")
+PY
+
 PRE=outputs/preflight
 rm -rf "$PRE"
 
@@ -71,10 +87,14 @@ python -m cppo.train --config configs/cppo_p75.yaml \
 test -f "$PRE/ckpt/config.json" || { echo "checkpoint was not written"; exit 1; }
 
 echo "=============================================================="
-echo "4/5  lm_eval through the vLLM backend, 8 documents"
+echo "4/5  lm_eval through the vLLM backend, all three tasks"
 echo "=============================================================="
-python -m cppo.evaluate --model-path "$PRE/ckpt" --tasks gsm8k \
-  --backend vllm --limit 8 --max-gen-toks 256 --prompt-style boxed \
+# All three tasks, not just gsm8k: each one loads its own task module and
+# datasets, and a failure in any of them would otherwise only appear after
+# the training sweep has already run.
+python -m cppo.evaluate --model-path "$PRE/ckpt" \
+  --tasks gsm8k minerva_math aime24 \
+  --backend vllm --limit 2 --max-gen-toks 256 --prompt-style boxed \
   --gpu-memory-utilization 0.5 --output-path "$PRE/eval.json"
 
 echo "=============================================================="

@@ -8,4 +8,5 @@ accelerate>=1.0
 peft>=0.13
 math-verify>=0.5
 pyyaml>=6.0
-lm-eval>=0.4.8
+lm-eval[math]>=0.4.8
+antlr4-python3-runtime==4.11.0

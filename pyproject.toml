@@ -24,7 +24,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-eval = ["lm-eval>=0.4.8"]
+# `minerva_math` asserts antlr4-python3-runtime==4.11: sympy's LaTeX parser is
+# generated against that exact version, and `math_verify` shares the
+# dependency. Without the pin the task module raises on import, which only
+# surfaces once evaluation starts.
+eval = ["lm-eval[math]>=0.4.8", "antlr4-python3-runtime==4.11.0"]
 vllm = ["vllm>=0.8.3"]
 dev = ["pylint>=3.2", "mypy>=1.11", "pytest>=8.0", "matplotlib>=3.8"]
 
