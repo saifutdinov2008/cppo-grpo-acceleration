@@ -53,7 +53,7 @@ def build_model_args(
     backend: str = "hf",
     dtype: str = "bfloat16",
     device: str | None = None,
-    max_model_len: int = 4096,
+    max_model_len: int = 8192,
     gpu_memory_utilization: float = 0.85,
     tensor_parallel_size: int = 1,
 ) -> str:
@@ -67,7 +67,9 @@ def build_model_args(
         device: Device to pin the Transformers backend to, e.g. ``"cpu"`` or
             ``"cuda:0"``. ``None`` lets the harness choose. Ignored by vLLM,
             which manages placement itself.
-        max_model_len: Maximum sequence length (vLLM only).
+        max_model_len: Maximum sequence length (vLLM only). Must exceed the
+            longest few-shot prompt plus ``max_gen_toks``, or `lm_eval`
+            left-truncates the prompt and silently drops few-shot examples.
         gpu_memory_utilization: Fraction of VRAM vLLM may claim.
         tensor_parallel_size: Number of GPUs for tensor parallelism (vLLM).
 
@@ -140,7 +142,7 @@ def run_evaluation(
     num_fewshot: int | None = None,
     seed: int = 1234,
     output_path: str | Path | None = None,
-    max_model_len: int = 4096,
+    max_model_len: int = 8192,
     gpu_memory_utilization: float = 0.85,
     tensor_parallel_size: int = 1,
 ) -> dict[str, Any]:
@@ -162,7 +164,9 @@ def run_evaluation(
         num_fewshot: Override the per-task few-shot count.
         seed: Seed forwarded to python, numpy, torch and the fewshot sampler.
         output_path: Where to write the JSON payload; skipped when ``None``.
-        max_model_len: Maximum sequence length (vLLM only).
+        max_model_len: Maximum sequence length (vLLM only). Must exceed the
+            longest few-shot prompt plus ``max_gen_toks``, or `lm_eval`
+            left-truncates the prompt and silently drops few-shot examples.
         gpu_memory_utilization: Fraction of VRAM vLLM may claim.
         tensor_parallel_size: Number of GPUs for tensor parallelism (vLLM).
 
@@ -238,7 +242,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--num-fewshot", type=int, default=None)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--output-path", default=None)
-    parser.add_argument("--max-model-len", type=int, default=4096)
+    parser.add_argument("--max-model-len", type=int, default=8192)
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.85)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument(

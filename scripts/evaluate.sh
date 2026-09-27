@@ -20,6 +20,9 @@ shift 2 || true
 BACKEND="${BACKEND:-hf}"
 BATCH_SIZE="${BATCH_SIZE:-auto}"
 MAX_GEN_TOKS="${MAX_GEN_TOKS:-2048}"
+# Must exceed the longest few-shot prompt plus MAX_GEN_TOKS; minerva_math is
+# 4-shot and overflows a 4096 window, which would left-truncate the prompt.
+MAX_MODEL_LEN="${MAX_MODEL_LEN:-8192}"
 export TOKENIZERS_PARALLELISM=false
 export HF_ALLOW_CODE_EVAL=0
 
@@ -29,6 +32,7 @@ python -m cppo.evaluate \
   --backend "$BACKEND" \
   --batch-size "$BATCH_SIZE" \
   --max-gen-toks "$MAX_GEN_TOKS" \
+  --max-model-len "$MAX_MODEL_LEN" \
   --prompt-style boxed \
   --output-path "$OUTPUT" \
   "$@"
