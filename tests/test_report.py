@@ -204,3 +204,34 @@ def test_tables_render_without_any_training_runs() -> None:
 
     latex = render_tables([], benchmark, latex=True)
     assert r"\emph{No training runs available.}" in latex
+
+
+def test_untrained_baseline_appears_as_the_reference_row() -> None:
+    """Without it the table cannot show whether training helped at all."""
+    summaries = [summarize_run(_profile("grpo", 0.0, 100.0, 1.0), {"gsm8k": 41.0})]
+    rendered = render_tables(summaries, baseline_accuracies={"gsm8k": 12.5})
+
+    # Look inside the accuracy section only; the performance table also has rows.
+    accuracy_section = rendered.split("### Downstream accuracy")[1].split("###")[0]
+    data_rows = [
+        line
+        for line in accuracy_section.splitlines()
+        if line.startswith("| ") and "---" not in line and "Method" not in line
+    ]
+
+    assert "untrained" in data_rows[0], "the reference row must come first"
+    assert "12.50" in data_rows[0]
+    # The untrained model has no pruning rate and no training reward.
+    assert data_rows[0].count("--") >= 2
+    assert "grpo" in data_rows[1] and "41.00" in data_rows[1]
+
+    # It must not leak into the training-performance table, which has no such run.
+    performance_section = rendered.split("### Training performance")[1].split("###")[0]
+    assert "untrained" not in performance_section
+
+
+def test_baseline_only_tasks_still_get_a_column() -> None:
+    """A task the baseline has but the runs lack must not vanish."""
+    summaries = [summarize_run(_profile("grpo", 0.0, 100.0, 1.0), {"gsm8k": 41.0})]
+    rendered = render_tables(summaries, baseline_accuracies={"gsm8k": 12.5, "aime24": 0.0})
+    assert "aime24" in rendered

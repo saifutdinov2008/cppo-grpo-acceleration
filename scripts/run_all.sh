@@ -94,10 +94,12 @@ python benchmarks/plot_results.py \
 
 python -m cppo.report \
   --profiles "${PROFILES[@]}" --evals "${EVALS[@]}" \
+  --baseline-eval results/base/eval.json \
   --benchmark results/update_stage_benchmark.json \
   --format markdown --output results/tables.md
 python -m cppo.report \
   --profiles "${PROFILES[@]}" --evals "${EVALS[@]}" \
+  --baseline-eval results/base/eval.json \
   --benchmark results/update_stage_benchmark.json \
   --format latex --output report/generated_tables.tex
 

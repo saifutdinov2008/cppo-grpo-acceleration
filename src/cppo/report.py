@@ -250,24 +250,46 @@ def _performance_table(summaries: Sequence[RunSummary], latex: bool) -> str:
     return _table(headers, rows, latex)
 
 
-def _accuracy_table(summaries: Sequence[RunSummary], latex: bool) -> str:
+def _accuracy_table(
+    summaries: Sequence[RunSummary],
+    latex: bool,
+    baseline_accuracies: dict[str, float] | None = None,
+) -> str:
     """Render the evaluation-accuracy table.
+
+    The untrained model is shown as the first row when its evaluation is
+    supplied. Without it the table says which run scored highest but not
+    whether any of them improved on the starting point at all.
 
     Args:
         summaries: Run summaries, baseline first.
         latex: Whether to emit LaTeX.
+        baseline_accuracies: Accuracies of the untrained reference model.
 
     Returns:
         The rendered table, or a placeholder when no accuracies are present.
     """
-    tasks = sorted({task for summary in summaries for task in summary.accuracies})
+    tasks = sorted(
+        {task for summary in summaries for task in summary.accuracies}
+        | set(baseline_accuracies or {})
+    )
 
     if not tasks:
         if latex:
             return r"\emph{No evaluation results available.}"
         return "_No evaluation results available._"
     headers = ["Method", "P", *tasks, "Final reward"]
-    rows = [
+    rows = []
+    if baseline_accuracies is not None:
+        rows.append(
+            [
+                "Qwen3-0.6B (untrained)",
+                "--",
+                *[_fmt(baseline_accuracies.get(task)) for task in tasks],
+                "--",
+            ]
+        )
+    rows.extend(
         [
             summary.run_name,
             f"{100 * summary.pruning_rate:.2f}%",
@@ -275,7 +297,7 @@ def _accuracy_table(summaries: Sequence[RunSummary], latex: bool) -> str:
             _fmt(summary.final_reward, 3),
         ]
         for summary in summaries
-    ]
+    )
     return _table(headers, rows, latex)
 
 
@@ -385,6 +407,7 @@ def render_tables(
     summaries: Sequence[RunSummary],
     benchmark: dict[str, Any] | None = None,
     *,
+    baseline_accuracies: dict[str, float] | None = None,
     latex: bool = False,
 ) -> str:
     """Render every report table as one document fragment.
@@ -392,6 +415,7 @@ def render_tables(
     Args:
         summaries: Run summaries, baseline first.
         benchmark: Optional update-stage benchmark payload.
+        baseline_accuracies: Accuracies of the untrained reference model.
         latex: Whether to emit LaTeX instead of Markdown.
 
     Returns:
@@ -406,7 +430,7 @@ def render_tables(
         heading("Training performance"),
         _performance_table(summaries, latex),
         heading("Downstream accuracy (lm-evaluation-harness, % exact match)"),
-        _accuracy_table(summaries, latex),
+        _accuracy_table(summaries, latex, baseline_accuracies),
         heading("Update-stage micro-benchmark"),
         _benchmark_table(benchmark, latex),
     ]
@@ -441,6 +465,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--evals", nargs="*", default=[], help="eval.json paths, aligned with --profiles"
     )
     parser.add_argument("--benchmark", default=None, help="update-stage benchmark JSON")
+    parser.add_argument(
+        "--baseline-eval",
+        default=None,
+        help="eval.json for the untrained model, shown as the reference row",
+    )
     parser.add_argument("--format", default="markdown", choices=["markdown", "latex"])
     parser.add_argument("--output", default=None, help="write here instead of stdout")
     return parser
@@ -471,7 +500,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         for path, accuracy in zip(args.profiles, accuracies)
     ]
     benchmark = _load_json(Path(args.benchmark)) if args.benchmark else None
-    rendered = render_tables(summaries, benchmark, latex=args.format == "latex")
+    baseline = None
+    if args.baseline_eval:
+        payload = _load_json(Path(args.baseline_eval))
+        baseline = {k: float(v) for k, v in payload.get("cppo_summary", {}).items()}
+    rendered = render_tables(
+        summaries, benchmark, baseline_accuracies=baseline, latex=args.format == "latex"
+    )
 
     if args.output:
         destination = Path(args.output)
