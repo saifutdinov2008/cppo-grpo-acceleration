@@ -20,6 +20,11 @@ dataset_name: open-r1/DAPO-Math-17k-Processed
 dataset_config: en
 dataset_split: train
 prompt_style: boxed
+# Qwen3 is a hybrid thinking model. Left on, a 0.6B policy reasons past any
+# affordable completion budget: every completion truncates, none reaches a
+# \boxed{} answer, and truncation masking then zeroes the entire gradient.
+# Off for both training and evaluation, so the prompt formats agree.
+enable_thinking: false
 # One pass over a fixed 8k-problem subset. Both algorithms consume exactly the
 # same problems, which is what makes the wall-clock comparison meaningful.
 max_samples: 8192

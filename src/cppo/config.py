@@ -60,6 +60,13 @@ class RunSettings:  # pylint: disable=too-many-instance-attributes
     dataset_config: str | None = "en"
     dataset_split: str = "train"
     prompt_style: str = "boxed"
+    # Qwen3 is a hybrid thinking model: with thinking on it opens a <think>
+    # block and reasons until it exhausts the completion budget. At 0.6B on
+    # competition maths that means every completion is truncated, never
+    # reaches a \boxed{} answer, and -- with mask_truncated_completions --
+    # contributes no gradient at all. Held identical for training and
+    # evaluation so the two prompt formats agree.
+    enable_thinking: bool = False
     max_samples: int | None = None
     max_prompt_length: int = 640
     max_completion_length: int = 1024

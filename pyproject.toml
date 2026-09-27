@@ -36,6 +36,7 @@ dev = ["pylint>=3.2", "mypy>=1.11", "pytest>=8.0", "matplotlib>=3.8"]
 cppo-train = "cppo.train:main"
 cppo-eval = "cppo.evaluate:main"
 cppo-report = "cppo.report:main"
+cppo-preflight-check = "cppo.preflight_checks:main"
 
 [project.urls]
 Homepage = "https://github.com/saifutdinov2008/cppo-grpo-acceleration"

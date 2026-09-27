@@ -53,6 +53,7 @@ def build_model_args(
     backend: str = "hf",
     dtype: str = "bfloat16",
     device: str | None = None,
+    enable_thinking: bool = False,
     max_model_len: int = 8192,
     gpu_memory_utilization: float = 0.85,
     tensor_parallel_size: int = 1,
@@ -67,6 +68,10 @@ def build_model_args(
         device: Device to pin the Transformers backend to, e.g. ``"cpu"`` or
             ``"cuda:0"``. ``None`` lets the harness choose. Ignored by vLLM,
             which manages placement itself.
+        enable_thinking: Whether Qwen3's ``<think>`` block is left open. Must
+            match the training setting, or the policy is evaluated on a prompt
+            format it was not trained for. Only the vLLM backend exposes this;
+            the Transformers backend ignores it.
         max_model_len: Maximum sequence length (vLLM only). Must exceed the
             longest few-shot prompt plus ``max_gen_toks``, or `lm_eval`
             left-truncates the prompt and silently drops few-shot examples.
@@ -90,6 +95,7 @@ def build_model_args(
             f"max_model_len={max_model_len}",
             f"gpu_memory_utilization={gpu_memory_utilization}",
             f"tensor_parallel_size={tensor_parallel_size}",
+            f"enable_thinking={enable_thinking}",
             "trust_remote_code=True",
         ]
     else:
@@ -135,6 +141,7 @@ def run_evaluation(
     batch_size: str = "auto",
     dtype: str = "bfloat16",
     device: str | None = None,
+    enable_thinking: bool = False,
     apply_chat_template: bool = True,
     system_instruction: str | None = None,
     max_gen_toks: int | None = 2048,
@@ -155,6 +162,8 @@ def run_evaluation(
         batch_size: `lm_eval` batch size; ``"auto"`` lets the harness probe.
         dtype: Torch dtype used to load the weights.
         device: Device for the Transformers backend; ``None`` auto-selects.
+        enable_thinking: Must match the training setting; see
+            :func:`build_model_args`.
         apply_chat_template: Wrap each prompt in the tokeniser's chat template.
         system_instruction: System prompt prepended to every request.  Pass the
             training system prompt so that train and test prompts agree.
@@ -184,6 +193,7 @@ def run_evaluation(
         backend=backend,
         dtype=dtype,
         device=device,
+        enable_thinking=enable_thinking,
         max_model_len=max_model_len,
         gpu_memory_utilization=gpu_memory_utilization,
         tensor_parallel_size=tensor_parallel_size,
@@ -236,6 +246,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument(
         "--device", default=None, help="e.g. cpu or cuda:0; hf backend only"
+    )
+    parser.add_argument(
+        "--enable-thinking",
+        action="store_true",
+        help="leave Qwen3's <think> block open; must match the training setting",
     )
     parser.add_argument("--max-gen-toks", type=int, default=2048)
     parser.add_argument("--limit", type=int, default=None, help="documents per task")
@@ -290,6 +305,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         batch_size=args.batch_size,
         dtype=args.dtype,
         device=args.device,
+        enable_thinking=args.enable_thinking,
         apply_chat_template=args.apply_chat_template,
         system_instruction=system_instruction,
         max_gen_toks=args.max_gen_toks,

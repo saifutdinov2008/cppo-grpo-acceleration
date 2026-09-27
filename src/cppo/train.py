@@ -94,6 +94,7 @@ def build_grpo_config(settings: RunSettings, geometry: BatchGeometry) -> GRPOCon
         num_generations=settings.num_generations,
         # rollout
         max_completion_length=settings.max_completion_length,
+        chat_template_kwargs={"enable_thinking": settings.enable_thinking},
         temperature=settings.temperature,
         top_p=settings.top_p,
         **optional,

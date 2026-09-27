@@ -355,6 +355,7 @@ matters most.
 | Training subset | 8,192 problems, one epoch |
 | Reward | format `{0,1}` + accuracy `{0,2}` via `math_verify` |
 | Prompt | chat template, "reason step by step, answer in `\boxed{}`" |
+| Thinking mode | **off** (`enable_thinking: false`) — see below |
 | Group size `G` | 8 |
 | Max completion length | 1024 tokens |
 | Sampling | temperature 1.0, top-p 1.0 |
@@ -374,6 +375,21 @@ The results table therefore reports **questions per second** as the headline
 metric rather than raw wall clock. Throughput is comparable under either
 protocol: it credits an algorithm for covering the same training data in less
 time, and never for covering more data in the same time.
+
+**Why Qwen3's thinking mode is off.** Qwen3 is a hybrid thinking model: left
+on, its chat template opens a `<think>` block and the policy reasons until it
+exhausts the completion budget. Measured on this pipeline at 1024 tokens,
+*every* completion was truncated — `min_length = max_length = 1024`,
+`clipped_ratio = 1.0`, `mean_terminated_length = 0` — so none ever reached a
+`\boxed{}` answer, `format_reward` was identically zero, and with
+`mask_truncated_completions` the entire batch was masked out of the loss:
+`grad_norm = 0`. The run would have trained for hours and moved no weights.
+
+A 0.6B policy's chain of thought does not fit an affordable rollout budget, so
+thinking is disabled for **both training and evaluation** (`lm_eval`'s vLLM
+backend takes the same `enable_thinking` flag). Holding it identical on both
+sides is what keeps the prompt formats aligned. `scripts/preflight.sh` now
+fails outright if more than 50% of completions hit the cap.
 
 **Prompt/evaluation alignment.** The policy is trained with a chat template and
 a `\boxed{}` answer convention, and evaluated through `lm_eval`'s

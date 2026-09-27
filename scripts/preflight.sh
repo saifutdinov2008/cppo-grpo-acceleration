@@ -78,6 +78,20 @@ python -m cppo.train --config configs/cppo_p75.yaml \
   --no-save-final-model --profile-path "$PRE/cppo/profile.json"
 
 echo "=============================================================="
+echo "2b/5  Completions must terminate, not all hit the length cap"
+echo "=============================================================="
+# A policy that never emits EOS has every completion truncated, and with
+# mask_truncated_completions that zeroes the whole gradient: the sweep runs for
+# hours and the model never moves. Check it at the real completion length.
+python -m cppo.train --config configs/grpo.yaml \
+  --run-name preflight-length --output-dir "$PRE/length" \
+  --max-samples 64 --max-steps 1 \
+  --no-save-final-model --profile-path "$PRE/length/profile.json" \
+  2>&1 | tee "$PRE/length.log"
+
+python -m cppo.preflight_checks "$PRE/length.log"
+
+echo "=============================================================="
 echo "3/5  Checkpoint save/load round trip"
 echo "=============================================================="
 python -m cppo.train --config configs/cppo_p75.yaml \
