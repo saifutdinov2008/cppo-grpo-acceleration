@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from cppo.geometry import resolve_batch_geometry
+from cppo.geometry import BatchGeometry, resolve_batch_geometry
 
 
 def test_baseline_geometry_is_plain_grpo() -> None:
@@ -118,3 +118,35 @@ def test_non_positive_arguments_are_rejected(kwargs: dict[str, int]) -> None:
     base.update(kwargs)
     with pytest.raises(ValueError):
         resolve_batch_geometry(**base)  # type: ignore[arg-type]
+
+
+def test_warmup_is_scaled_to_a_constant_fraction_of_the_schedule() -> None:
+    """Every arm must warm up over the same share of its own schedule.
+
+    Dynamic allocation changes the optimiser-step count, so an absolute
+    warm-up length would cover wildly different fractions of each run and
+    confound the accuracy comparison it is supposed to leave untouched.
+    """
+    from cppo.train import _scaled_warmup_steps  # pylint: disable=import-outside-toplevel
+
+    def geometry_for(rate: float) -> BatchGeometry:
+        return resolve_batch_geometry(
+            base_per_device_train_batch_size=16,
+            gradient_accumulation_steps=8,
+            num_generations=8,
+            pruning_rate=rate,
+        )
+
+    baseline = geometry_for(0.0)
+    assert baseline.allocation_multiplier == 1
+    assert _scaled_warmup_steps(10, baseline) == 10
+
+    # m = 2, 4, 8 -> proportionally shorter warm-up.
+    assert _scaled_warmup_steps(10, geometry_for(0.5)) == 5
+    assert _scaled_warmup_steps(10, geometry_for(0.75)) == 3
+    assert _scaled_warmup_steps(10, geometry_for(0.875)) == 1
+
+    # Warm-up never rounds away to zero while it is enabled, and stays off
+    # when it was switched off.
+    assert _scaled_warmup_steps(1, geometry_for(0.875)) == 1
+    assert _scaled_warmup_steps(0, geometry_for(0.875)) == 0

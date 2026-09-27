@@ -114,7 +114,7 @@ def build_grpo_config(settings: RunSettings, geometry: BatchGeometry) -> GRPOCon
         # optimisation
         learning_rate=settings.learning_rate,
         lr_scheduler_type=settings.lr_scheduler_type,
-        warmup_steps=settings.warmup_steps,
+        warmup_steps=_scaled_warmup_steps(settings.warmup_steps, geometry),
         weight_decay=settings.weight_decay,
         max_grad_norm=settings.max_grad_norm,
         adam_beta1=settings.adam_beta1,
@@ -133,6 +133,30 @@ def build_grpo_config(settings: RunSettings, geometry: BatchGeometry) -> GRPOCon
         num_completions_to_print=settings.num_completions_to_print,
         disable_tqdm=False,
     )
+
+
+def _scaled_warmup_steps(base_warmup_steps: int, geometry: BatchGeometry) -> int:
+    """Scale warm-up so every run warms up over the same share of its schedule.
+
+    ``warmup_steps`` is an absolute step count, but dynamic allocation changes
+    how many optimiser steps an epoch takes: at ``m = 8`` a run has eight times
+    fewer steps, so a fixed 10-step warm-up would cover 16% of it against 2% of
+    the baseline's. The high-pruning arms would then train at a reduced
+    learning rate for a materially larger share of the run, which would show up
+    as an accuracy difference that has nothing to do with CPPO.
+
+    Args:
+        base_warmup_steps: Warm-up length expressed for the ``m = 1`` baseline.
+        geometry: The resolved batch geometry, which carries the multiplier.
+
+    Returns:
+        The warm-up length for this run, at least ``1`` when warm-up is enabled.
+    """
+    if base_warmup_steps <= 0:
+        return 0
+    # Integer round-half-up: `round()` is banker's rounding, so round(2.5) == 2.
+    multiplier = geometry.allocation_multiplier
+    return max(1, (base_warmup_steps + multiplier // 2) // multiplier)
 
 
 def _build_peft_config(settings: RunSettings) -> Any:

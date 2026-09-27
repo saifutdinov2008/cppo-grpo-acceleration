@@ -64,6 +64,10 @@ scale_rewards: group
 
 learning_rate: 1.0e-6
 lr_scheduler_type: constant_with_warmup
+# Expressed for the m = 1 baseline. The pipeline divides it by the allocation
+# multiplier so every run warms up over the same fraction of its schedule --
+# otherwise CPPO at P=0.875 (8x fewer steps) would spend 16% of its run at a
+# reduced learning rate against the baseline's 2%.
 warmup_steps: 10
 weight_decay: 0.0
 max_grad_norm: 0.2
