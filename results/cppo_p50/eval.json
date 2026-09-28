@@ -1,0 +1,863 @@
+{
+  "config": {
+    "batch_size": "auto",
+    "batch_sizes": [],
+    "bootstrap_iters": 0,
+    "device": null,
+    "fewshot_seed": 1234,
+    "gen_kwargs": {
+      "max_gen_toks": 2048
+    },
+    "limit": null,
+    "model": "vllm",
+    "model_args": "pretrained=outputs/cppo-p50,dtype=bfloat16,max_model_len=8192,gpu_memory_utilization=0.85,tensor_parallel_size=1,enable_thinking=False,trust_remote_code=True",
+    "numpy_seed": 1234,
+    "random_seed": 1234,
+    "torch_seed": 1234,
+    "use_cache": null
+  },
+  "configs": {
+    "aime24": {
+      "dataset_path": "Maxwell-Jia/AIME_2024",
+      "description": "",
+      "doc_to_target": "{{Answer}}",
+      "doc_to_text": "Question: {{Problem}}\nAnswer:",
+      "fewshot_config": {
+        "doc_to_choice": null,
+        "doc_to_target": "{{Answer}}",
+        "doc_to_text": "Question: {{Problem}}\nAnswer:",
+        "fewshot_delimiter": "\n\n",
+        "fewshot_indices": null,
+        "gen_prefix": null,
+        "process_docs": null,
+        "sampler": "default",
+        "samples": null,
+        "split": "train",
+        "target_delimiter": " "
+      },
+      "fewshot_delimiter": "\n\n",
+      "fewshot_split": "train",
+      "generation_kwargs": {
+        "do_sample": false,
+        "max_gen_toks": 2048,
+        "temperature": 0.0,
+        "until": [
+          "Question:",
+          "</s>",
+          "<|im_end|>",
+          "<|eot_id|>"
+        ]
+      },
+      "metadata": {
+        "config_source": "/usr/local/lib/python3.12/dist-packages/lm_eval/tasks/aime/aime24.yaml",
+        "dtype": "bfloat16",
+        "enable_thinking": false,
+        "gpu_memory_utilization": 0.85,
+        "max_model_len": 8192,
+        "pretrained": "outputs/cppo-p50",
+        "tensor_parallel_size": 1,
+        "trust_remote_code": true,
+        "version": 0.0
+      },
+      "metric_list": [
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "exact_match"
+        }
+      ],
+      "num_fewshot": 0,
+      "output_type": "generate_until",
+      "process_results": "def process_results(doc: dict, results: List[str]) -> Dict[str, int]:\n    retval = 0\n    response = results[0]\n\n    # Try to extract answer from $...$ format first\n    indices = [pos for pos, char in enumerate(response) if char == \"$\"]\n    if len(indices) <= 1:\n        answer = response\n    else:\n        answer = response[indices[0] + 1 : indices[-1]]\n\n    # Extract from \\\\boxed{} if present\n    boxed_answer = last_boxed_only_string(response)\n    if boxed_answer is not None:\n        try:\n            boxed_content = remove_boxed(boxed_answer)\n            if boxed_content is not None:\n                answer = boxed_content\n        except (AssertionError, IndexError):\n            pass\n\n    # Check if answer matches target\n    answer_key = next(k for k in doc.keys() if k.lower() == \"answer\")\n    target = str(doc[answer_key])\n    if is_equiv(answer, target):\n        retval = 1\n\n    return {\"exact_match\": retval}\n",
+      "repeats": 1,
+      "should_decontaminate": false,
+      "target_delimiter": " ",
+      "task": "aime24",
+      "test_split": "train",
+      "training_split": "train",
+      "unsafe_code": false
+    },
+    "gsm8k": {
+      "dataset_name": "main",
+      "dataset_path": "openai/gsm8k",
+      "description": "",
+      "doc_to_target": "{{answer}}",
+      "doc_to_text": "Question: {{question}}\nAnswer:",
+      "fewshot_config": {
+        "doc_to_choice": null,
+        "doc_to_target": "{{answer}}",
+        "doc_to_text": "Question: {{question}}\nAnswer:",
+        "fewshot_delimiter": "\n\n",
+        "fewshot_indices": null,
+        "gen_prefix": null,
+        "process_docs": null,
+        "sampler": "default",
+        "samples": null,
+        "split": "train",
+        "target_delimiter": " "
+      },
+      "fewshot_delimiter": "\n\n",
+      "fewshot_split": "train",
+      "filter_list": [
+        {
+          "filter": [
+            {
+              "function": "regex",
+              "regex_pattern": "#### (\\-?[0-9\\.\\,]+)"
+            },
+            {
+              "function": "take_first"
+            }
+          ],
+          "name": "strict-match"
+        },
+        {
+          "filter": [
+            {
+              "function": "regex",
+              "group_select": -1,
+              "regex_pattern": "(-?[$0-9.,]{2,})|(-?[0-9]+)"
+            },
+            {
+              "function": "take_first"
+            }
+          ],
+          "name": "flexible-extract"
+        }
+      ],
+      "generation_kwargs": {
+        "do_sample": false,
+        "max_gen_toks": 2048,
+        "temperature": 0.0,
+        "until": [
+          "Question:",
+          "</s>",
+          "<|im_end|>"
+        ]
+      },
+      "metadata": {
+        "config_source": "/usr/local/lib/python3.12/dist-packages/lm_eval/tasks/gsm8k/gsm8k.yaml",
+        "dtype": "bfloat16",
+        "enable_thinking": false,
+        "gpu_memory_utilization": 0.85,
+        "max_model_len": 8192,
+        "pretrained": "outputs/cppo-p50",
+        "tensor_parallel_size": 1,
+        "trust_remote_code": true,
+        "version": 3.0
+      },
+      "metric_list": [
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "ignore_case": true,
+          "ignore_punctuation": false,
+          "metric": "exact_match",
+          "regexes_to_ignore": [
+            ",",
+            "\\$",
+            "(?s).*#### ",
+            "\\.$"
+          ]
+        }
+      ],
+      "num_fewshot": 5,
+      "output_type": "generate_until",
+      "repeats": 1,
+      "should_decontaminate": false,
+      "target_delimiter": " ",
+      "task": "gsm8k",
+      "test_split": "test",
+      "training_split": "train",
+      "unsafe_code": false
+    },
+    "minerva_math_algebra": {
+      "dataset_name": "algebra",
+      "dataset_path": "EleutherAI/hendrycks_math",
+      "description": "",
+      "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+      "doc_to_text": "def doc_to_text(doc: dict) -> str:\n    return \"Problem:\" + \"\\n\" + doc[\"problem\"] + \"\\n\\n\" + \"Solution:\"\n",
+      "fewshot_config": {
+        "doc_to_choice": null,
+        "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+        "doc_to_text": "<function doc_to_text at 0x7556b4bd4040>",
+        "fewshot_delimiter": "\n\n",
+        "fewshot_indices": null,
+        "gen_prefix": null,
+        "process_docs": "<function process_docs at 0x7556b7714a40>",
+        "sampler": "first_n",
+        "samples": "<function list_fewshot_samples at 0x7556b259b1a0>",
+        "split": null,
+        "target_delimiter": " "
+      },
+      "fewshot_delimiter": "\n\n",
+      "generation_kwargs": {
+        "do_sample": false,
+        "max_gen_toks": 2048,
+        "temperature": 0.0,
+        "until": [
+          "Problem:"
+        ]
+      },
+      "metadata": {
+        "config_source": "/usr/local/lib/python3.12/dist-packages/lm_eval/tasks/minerva_math/minerva_math_algebra.yaml",
+        "dtype": "bfloat16",
+        "enable_thinking": false,
+        "gpu_memory_utilization": 0.85,
+        "max_model_len": 8192,
+        "pretrained": "outputs/cppo-p50",
+        "tensor_parallel_size": 1,
+        "trust_remote_code": true,
+        "version": 3.1
+      },
+      "metric_list": [
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "exact_match"
+        },
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "math_verify"
+        }
+      ],
+      "num_fewshot": 4,
+      "output_type": "generate_until",
+      "process_docs": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    def _process_doc(doc: dict) -> dict:\n        out_doc = {\n            \"problem\": doc[\"problem\"],\n            \"solution\": doc[\"solution\"],\n            \"answer\": normalize_final_answer(\n                remove_boxed(last_boxed_only_string(doc[\"solution\"]))\n            ),\n        }\n        if getattr(doc, \"few_shot\", None) is not None:\n            out_doc[\"few_shot\"] = True\n        return out_doc\n\n    return dataset.map(_process_doc)\n",
+      "process_results": "def process_results(doc: dict, results: list[str]) -> dict[str, int]:\n    candidates = results[0]\n\n    unnormalized_answer = get_unnormalized_answer(candidates)\n    answer = normalize_final_answer(unnormalized_answer)\n\n    if is_equiv(answer, doc[\"answer\"]):\n        retval = 1\n    else:\n        retval = 0\n\n    # math_verify\n    _mvres = verify(\n        gold=parse(doc[\"solution\"]),\n        target=parse(candidates),\n    )\n    mathval = 1 if _mvres else 0\n\n    res = {\n        \"exact_match\": retval,\n        \"math_verify\": mathval,\n    }\n    return res\n",
+      "repeats": 1,
+      "should_decontaminate": false,
+      "target_delimiter": " ",
+      "task": "minerva_math_algebra",
+      "test_split": "test",
+      "training_split": "train",
+      "unsafe_code": false
+    },
+    "minerva_math_counting_and_prob": {
+      "dataset_name": "counting_and_probability",
+      "dataset_path": "EleutherAI/hendrycks_math",
+      "description": "",
+      "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+      "doc_to_text": "def doc_to_text(doc: dict) -> str:\n    return \"Problem:\" + \"\\n\" + doc[\"problem\"] + \"\\n\\n\" + \"Solution:\"\n",
+      "fewshot_config": {
+        "doc_to_choice": null,
+        "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+        "doc_to_text": "<function doc_to_text at 0x7556b4bd4040>",
+        "fewshot_delimiter": "\n\n",
+        "fewshot_indices": null,
+        "gen_prefix": null,
+        "process_docs": "<function process_docs at 0x7556b7714a40>",
+        "sampler": "first_n",
+        "samples": "<function list_fewshot_samples at 0x7556b259b1a0>",
+        "split": null,
+        "target_delimiter": " "
+      },
+      "fewshot_delimiter": "\n\n",
+      "generation_kwargs": {
+        "do_sample": false,
+        "max_gen_toks": 2048,
+        "temperature": 0.0,
+        "until": [
+          "Problem:"
+        ]
+      },
+      "metadata": {
+        "config_source": "/usr/local/lib/python3.12/dist-packages/lm_eval/tasks/minerva_math/minerva_math_counting_and_prob.yaml",
+        "dtype": "bfloat16",
+        "enable_thinking": false,
+        "gpu_memory_utilization": 0.85,
+        "max_model_len": 8192,
+        "pretrained": "outputs/cppo-p50",
+        "tensor_parallel_size": 1,
+        "trust_remote_code": true,
+        "version": 3.1
+      },
+      "metric_list": [
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "exact_match"
+        },
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "math_verify"
+        }
+      ],
+      "num_fewshot": 4,
+      "output_type": "generate_until",
+      "process_docs": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    def _process_doc(doc: dict) -> dict:\n        out_doc = {\n            \"problem\": doc[\"problem\"],\n            \"solution\": doc[\"solution\"],\n            \"answer\": normalize_final_answer(\n                remove_boxed(last_boxed_only_string(doc[\"solution\"]))\n            ),\n        }\n        if getattr(doc, \"few_shot\", None) is not None:\n            out_doc[\"few_shot\"] = True\n        return out_doc\n\n    return dataset.map(_process_doc)\n",
+      "process_results": "def process_results(doc: dict, results: list[str]) -> dict[str, int]:\n    candidates = results[0]\n\n    unnormalized_answer = get_unnormalized_answer(candidates)\n    answer = normalize_final_answer(unnormalized_answer)\n\n    if is_equiv(answer, doc[\"answer\"]):\n        retval = 1\n    else:\n        retval = 0\n\n    # math_verify\n    _mvres = verify(\n        gold=parse(doc[\"solution\"]),\n        target=parse(candidates),\n    )\n    mathval = 1 if _mvres else 0\n\n    res = {\n        \"exact_match\": retval,\n        \"math_verify\": mathval,\n    }\n    return res\n",
+      "repeats": 1,
+      "should_decontaminate": false,
+      "target_delimiter": " ",
+      "task": "minerva_math_counting_and_prob",
+      "test_split": "test",
+      "training_split": "train",
+      "unsafe_code": false
+    },
+    "minerva_math_geometry": {
+      "dataset_name": "geometry",
+      "dataset_path": "EleutherAI/hendrycks_math",
+      "description": "",
+      "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+      "doc_to_text": "def doc_to_text(doc: dict) -> str:\n    return \"Problem:\" + \"\\n\" + doc[\"problem\"] + \"\\n\\n\" + \"Solution:\"\n",
+      "fewshot_config": {
+        "doc_to_choice": null,
+        "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+        "doc_to_text": "<function doc_to_text at 0x7556b4bd4040>",
+        "fewshot_delimiter": "\n\n",
+        "fewshot_indices": null,
+        "gen_prefix": null,
+        "process_docs": "<function process_docs at 0x7556b7714a40>",
+        "sampler": "first_n",
+        "samples": "<function list_fewshot_samples at 0x7556b259b1a0>",
+        "split": null,
+        "target_delimiter": " "
+      },
+      "fewshot_delimiter": "\n\n",
+      "generation_kwargs": {
+        "do_sample": false,
+        "max_gen_toks": 2048,
+        "temperature": 0.0,
+        "until": [
+          "Problem:"
+        ]
+      },
+      "metadata": {
+        "config_source": "/usr/local/lib/python3.12/dist-packages/lm_eval/tasks/minerva_math/minerva_math_geometry.yaml",
+        "dtype": "bfloat16",
+        "enable_thinking": false,
+        "gpu_memory_utilization": 0.85,
+        "max_model_len": 8192,
+        "pretrained": "outputs/cppo-p50",
+        "tensor_parallel_size": 1,
+        "trust_remote_code": true,
+        "version": 3.1
+      },
+      "metric_list": [
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "exact_match"
+        },
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "math_verify"
+        }
+      ],
+      "num_fewshot": 4,
+      "output_type": "generate_until",
+      "process_docs": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    def _process_doc(doc: dict) -> dict:\n        out_doc = {\n            \"problem\": doc[\"problem\"],\n            \"solution\": doc[\"solution\"],\n            \"answer\": normalize_final_answer(\n                remove_boxed(last_boxed_only_string(doc[\"solution\"]))\n            ),\n        }\n        if getattr(doc, \"few_shot\", None) is not None:\n            out_doc[\"few_shot\"] = True\n        return out_doc\n\n    return dataset.map(_process_doc)\n",
+      "process_results": "def process_results(doc: dict, results: list[str]) -> dict[str, int]:\n    candidates = results[0]\n\n    unnormalized_answer = get_unnormalized_answer(candidates)\n    answer = normalize_final_answer(unnormalized_answer)\n\n    if is_equiv(answer, doc[\"answer\"]):\n        retval = 1\n    else:\n        retval = 0\n\n    # math_verify\n    _mvres = verify(\n        gold=parse(doc[\"solution\"]),\n        target=parse(candidates),\n    )\n    mathval = 1 if _mvres else 0\n\n    res = {\n        \"exact_match\": retval,\n        \"math_verify\": mathval,\n    }\n    return res\n",
+      "repeats": 1,
+      "should_decontaminate": false,
+      "target_delimiter": " ",
+      "task": "minerva_math_geometry",
+      "test_split": "test",
+      "training_split": "train",
+      "unsafe_code": false
+    },
+    "minerva_math_intermediate_algebra": {
+      "dataset_name": "intermediate_algebra",
+      "dataset_path": "EleutherAI/hendrycks_math",
+      "description": "",
+      "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+      "doc_to_text": "def doc_to_text(doc: dict) -> str:\n    return \"Problem:\" + \"\\n\" + doc[\"problem\"] + \"\\n\\n\" + \"Solution:\"\n",
+      "fewshot_config": {
+        "doc_to_choice": null,
+        "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+        "doc_to_text": "<function doc_to_text at 0x7556b4bd4040>",
+        "fewshot_delimiter": "\n\n",
+        "fewshot_indices": null,
+        "gen_prefix": null,
+        "process_docs": "<function process_docs at 0x7556b7714a40>",
+        "sampler": "first_n",
+        "samples": "<function list_fewshot_samples at 0x7556b259b1a0>",
+        "split": null,
+        "target_delimiter": " "
+      },
+      "fewshot_delimiter": "\n\n",
+      "generation_kwargs": {
+        "do_sample": false,
+        "max_gen_toks": 2048,
+        "temperature": 0.0,
+        "until": [
+          "Problem:"
+        ]
+      },
+      "metadata": {
+        "config_source": "/usr/local/lib/python3.12/dist-packages/lm_eval/tasks/minerva_math/minerva_math_intermediate_algebra.yaml",
+        "dtype": "bfloat16",
+        "enable_thinking": false,
+        "gpu_memory_utilization": 0.85,
+        "max_model_len": 8192,
+        "pretrained": "outputs/cppo-p50",
+        "tensor_parallel_size": 1,
+        "trust_remote_code": true,
+        "version": 3.1
+      },
+      "metric_list": [
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "exact_match"
+        },
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "math_verify"
+        }
+      ],
+      "num_fewshot": 4,
+      "output_type": "generate_until",
+      "process_docs": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    def _process_doc(doc: dict) -> dict:\n        out_doc = {\n            \"problem\": doc[\"problem\"],\n            \"solution\": doc[\"solution\"],\n            \"answer\": normalize_final_answer(\n                remove_boxed(last_boxed_only_string(doc[\"solution\"]))\n            ),\n        }\n        if getattr(doc, \"few_shot\", None) is not None:\n            out_doc[\"few_shot\"] = True\n        return out_doc\n\n    return dataset.map(_process_doc)\n",
+      "process_results": "def process_results(doc: dict, results: list[str]) -> dict[str, int]:\n    candidates = results[0]\n\n    unnormalized_answer = get_unnormalized_answer(candidates)\n    answer = normalize_final_answer(unnormalized_answer)\n\n    if is_equiv(answer, doc[\"answer\"]):\n        retval = 1\n    else:\n        retval = 0\n\n    # math_verify\n    _mvres = verify(\n        gold=parse(doc[\"solution\"]),\n        target=parse(candidates),\n    )\n    mathval = 1 if _mvres else 0\n\n    res = {\n        \"exact_match\": retval,\n        \"math_verify\": mathval,\n    }\n    return res\n",
+      "repeats": 1,
+      "should_decontaminate": false,
+      "target_delimiter": " ",
+      "task": "minerva_math_intermediate_algebra",
+      "test_split": "test",
+      "training_split": "train",
+      "unsafe_code": false
+    },
+    "minerva_math_num_theory": {
+      "dataset_name": "number_theory",
+      "dataset_path": "EleutherAI/hendrycks_math",
+      "description": "",
+      "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+      "doc_to_text": "def doc_to_text(doc: dict) -> str:\n    return \"Problem:\" + \"\\n\" + doc[\"problem\"] + \"\\n\\n\" + \"Solution:\"\n",
+      "fewshot_config": {
+        "doc_to_choice": null,
+        "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+        "doc_to_text": "<function doc_to_text at 0x7556b4bd4040>",
+        "fewshot_delimiter": "\n\n",
+        "fewshot_indices": null,
+        "gen_prefix": null,
+        "process_docs": "<function process_docs at 0x7556b7714a40>",
+        "sampler": "first_n",
+        "samples": "<function list_fewshot_samples at 0x7556b259b1a0>",
+        "split": null,
+        "target_delimiter": " "
+      },
+      "fewshot_delimiter": "\n\n",
+      "generation_kwargs": {
+        "do_sample": false,
+        "max_gen_toks": 2048,
+        "temperature": 0.0,
+        "until": [
+          "Problem:"
+        ]
+      },
+      "metadata": {
+        "config_source": "/usr/local/lib/python3.12/dist-packages/lm_eval/tasks/minerva_math/minerva_math_num_theory.yaml",
+        "dtype": "bfloat16",
+        "enable_thinking": false,
+        "gpu_memory_utilization": 0.85,
+        "max_model_len": 8192,
+        "pretrained": "outputs/cppo-p50",
+        "tensor_parallel_size": 1,
+        "trust_remote_code": true,
+        "version": 3.1
+      },
+      "metric_list": [
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "exact_match"
+        },
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "math_verify"
+        }
+      ],
+      "num_fewshot": 4,
+      "output_type": "generate_until",
+      "process_docs": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    def _process_doc(doc: dict) -> dict:\n        out_doc = {\n            \"problem\": doc[\"problem\"],\n            \"solution\": doc[\"solution\"],\n            \"answer\": normalize_final_answer(\n                remove_boxed(last_boxed_only_string(doc[\"solution\"]))\n            ),\n        }\n        if getattr(doc, \"few_shot\", None) is not None:\n            out_doc[\"few_shot\"] = True\n        return out_doc\n\n    return dataset.map(_process_doc)\n",
+      "process_results": "def process_results(doc: dict, results: list[str]) -> dict[str, int]:\n    candidates = results[0]\n\n    unnormalized_answer = get_unnormalized_answer(candidates)\n    answer = normalize_final_answer(unnormalized_answer)\n\n    if is_equiv(answer, doc[\"answer\"]):\n        retval = 1\n    else:\n        retval = 0\n\n    # math_verify\n    _mvres = verify(\n        gold=parse(doc[\"solution\"]),\n        target=parse(candidates),\n    )\n    mathval = 1 if _mvres else 0\n\n    res = {\n        \"exact_match\": retval,\n        \"math_verify\": mathval,\n    }\n    return res\n",
+      "repeats": 1,
+      "should_decontaminate": false,
+      "target_delimiter": " ",
+      "task": "minerva_math_num_theory",
+      "test_split": "test",
+      "training_split": "train",
+      "unsafe_code": false
+    },
+    "minerva_math_prealgebra": {
+      "dataset_name": "prealgebra",
+      "dataset_path": "EleutherAI/hendrycks_math",
+      "description": "",
+      "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+      "doc_to_text": "def doc_to_text(doc: dict) -> str:\n    return \"Problem:\" + \"\\n\" + doc[\"problem\"] + \"\\n\\n\" + \"Solution:\"\n",
+      "fewshot_config": {
+        "doc_to_choice": null,
+        "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+        "doc_to_text": "<function doc_to_text at 0x7556b4bd4040>",
+        "fewshot_delimiter": "\n\n",
+        "fewshot_indices": null,
+        "gen_prefix": null,
+        "process_docs": "<function process_docs at 0x7556b7714a40>",
+        "sampler": "first_n",
+        "samples": "<function list_fewshot_samples at 0x7556b259b1a0>",
+        "split": null,
+        "target_delimiter": " "
+      },
+      "fewshot_delimiter": "\n\n",
+      "generation_kwargs": {
+        "do_sample": false,
+        "max_gen_toks": 2048,
+        "temperature": 0.0,
+        "until": [
+          "Problem:"
+        ]
+      },
+      "metadata": {
+        "config_source": "/usr/local/lib/python3.12/dist-packages/lm_eval/tasks/minerva_math/minerva_math_prealgebra.yaml",
+        "dtype": "bfloat16",
+        "enable_thinking": false,
+        "gpu_memory_utilization": 0.85,
+        "max_model_len": 8192,
+        "pretrained": "outputs/cppo-p50",
+        "tensor_parallel_size": 1,
+        "trust_remote_code": true,
+        "version": 3.1
+      },
+      "metric_list": [
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "exact_match"
+        },
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "math_verify"
+        }
+      ],
+      "num_fewshot": 4,
+      "output_type": "generate_until",
+      "process_docs": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    def _process_doc(doc: dict) -> dict:\n        out_doc = {\n            \"problem\": doc[\"problem\"],\n            \"solution\": doc[\"solution\"],\n            \"answer\": normalize_final_answer(\n                remove_boxed(last_boxed_only_string(doc[\"solution\"]))\n            ),\n        }\n        if getattr(doc, \"few_shot\", None) is not None:\n            out_doc[\"few_shot\"] = True\n        return out_doc\n\n    return dataset.map(_process_doc)\n",
+      "process_results": "def process_results(doc: dict, results: list[str]) -> dict[str, int]:\n    candidates = results[0]\n\n    unnormalized_answer = get_unnormalized_answer(candidates)\n    answer = normalize_final_answer(unnormalized_answer)\n\n    if is_equiv(answer, doc[\"answer\"]):\n        retval = 1\n    else:\n        retval = 0\n\n    # math_verify\n    _mvres = verify(\n        gold=parse(doc[\"solution\"]),\n        target=parse(candidates),\n    )\n    mathval = 1 if _mvres else 0\n\n    res = {\n        \"exact_match\": retval,\n        \"math_verify\": mathval,\n    }\n    return res\n",
+      "repeats": 1,
+      "should_decontaminate": false,
+      "target_delimiter": " ",
+      "task": "minerva_math_prealgebra",
+      "test_split": "test",
+      "training_split": "train",
+      "unsafe_code": false
+    },
+    "minerva_math_precalc": {
+      "dataset_name": "precalculus",
+      "dataset_path": "EleutherAI/hendrycks_math",
+      "description": "",
+      "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+      "doc_to_text": "def doc_to_text(doc: dict) -> str:\n    return \"Problem:\" + \"\\n\" + doc[\"problem\"] + \"\\n\\n\" + \"Solution:\"\n",
+      "fewshot_config": {
+        "doc_to_choice": null,
+        "doc_to_target": "{{answer if few_shot is undefined else solution}}",
+        "doc_to_text": "<function doc_to_text at 0x7556b4bd4040>",
+        "fewshot_delimiter": "\n\n",
+        "fewshot_indices": null,
+        "gen_prefix": null,
+        "process_docs": "<function process_docs at 0x7556b7714a40>",
+        "sampler": "first_n",
+        "samples": "<function list_fewshot_samples at 0x7556b259b1a0>",
+        "split": null,
+        "target_delimiter": " "
+      },
+      "fewshot_delimiter": "\n\n",
+      "generation_kwargs": {
+        "do_sample": false,
+        "max_gen_toks": 2048,
+        "temperature": 0.0,
+        "until": [
+          "Problem:"
+        ]
+      },
+      "metadata": {
+        "config_source": "/usr/local/lib/python3.12/dist-packages/lm_eval/tasks/minerva_math/minerva_math_precalc.yaml",
+        "dtype": "bfloat16",
+        "enable_thinking": false,
+        "gpu_memory_utilization": 0.85,
+        "max_model_len": 8192,
+        "pretrained": "outputs/cppo-p50",
+        "tensor_parallel_size": 1,
+        "trust_remote_code": true,
+        "version": 3.1
+      },
+      "metric_list": [
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "exact_match"
+        },
+        {
+          "aggregation": "mean",
+          "higher_is_better": true,
+          "metric": "math_verify"
+        }
+      ],
+      "num_fewshot": 4,
+      "output_type": "generate_until",
+      "process_docs": "def process_docs(dataset: datasets.Dataset) -> datasets.Dataset:\n    def _process_doc(doc: dict) -> dict:\n        out_doc = {\n            \"problem\": doc[\"problem\"],\n            \"solution\": doc[\"solution\"],\n            \"answer\": normalize_final_answer(\n                remove_boxed(last_boxed_only_string(doc[\"solution\"]))\n            ),\n        }\n        if getattr(doc, \"few_shot\", None) is not None:\n            out_doc[\"few_shot\"] = True\n        return out_doc\n\n    return dataset.map(_process_doc)\n",
+      "process_results": "def process_results(doc: dict, results: list[str]) -> dict[str, int]:\n    candidates = results[0]\n\n    unnormalized_answer = get_unnormalized_answer(candidates)\n    answer = normalize_final_answer(unnormalized_answer)\n\n    if is_equiv(answer, doc[\"answer\"]):\n        retval = 1\n    else:\n        retval = 0\n\n    # math_verify\n    _mvres = verify(\n        gold=parse(doc[\"solution\"]),\n        target=parse(candidates),\n    )\n    mathval = 1 if _mvres else 0\n\n    res = {\n        \"exact_match\": retval,\n        \"math_verify\": mathval,\n    }\n    return res\n",
+      "repeats": 1,
+      "should_decontaminate": false,
+      "target_delimiter": " ",
+      "task": "minerva_math_precalc",
+      "test_split": "test",
+      "training_split": "train",
+      "unsafe_code": false
+    }
+  },
+  "cppo_summary": {
+    "aime24": 3.3333333333333335,
+    "gsm8k": 38.51402577710387,
+    "minerva_math": 45.48
+  },
+  "date": 1790532315.4363995,
+  "eot_token_id": 151645,
+  "git_hash": "2df37bc",
+  "group_subtasks": {
+    "minerva_math": [
+      "minerva_math_algebra",
+      "minerva_math_counting_and_prob",
+      "minerva_math_geometry",
+      "minerva_math_intermediate_algebra",
+      "minerva_math_num_theory",
+      "minerva_math_prealgebra",
+      "minerva_math_precalc"
+    ]
+  },
+  "groups": {
+    "minerva_math": {
+      "alias": "minerva_math",
+      "exact_match,none": 0.0,
+      "exact_match_stderr,none": "N/A",
+      "math_verify,none": 0.4548,
+      "math_verify_stderr,none": "N/A",
+      "name": "minerva_math",
+      "sample_count": {
+        "exact_match,none": 5000,
+        "math_verify,none": 5000
+      },
+      "sample_len": 5000
+    }
+  },
+  "higher_is_better": {
+    "aime24": {
+      "exact_match": true
+    },
+    "gsm8k": {
+      "exact_match": true
+    },
+    "minerva_math": {
+      "exact_match": true,
+      "math_verify": true
+    },
+    "minerva_math_algebra": {
+      "exact_match": true,
+      "math_verify": true
+    },
+    "minerva_math_counting_and_prob": {
+      "exact_match": true,
+      "math_verify": true
+    },
+    "minerva_math_geometry": {
+      "exact_match": true,
+      "math_verify": true
+    },
+    "minerva_math_intermediate_algebra": {
+      "exact_match": true,
+      "math_verify": true
+    },
+    "minerva_math_num_theory": {
+      "exact_match": true,
+      "math_verify": true
+    },
+    "minerva_math_prealgebra": {
+      "exact_match": true,
+      "math_verify": true
+    },
+    "minerva_math_precalc": {
+      "exact_match": true,
+      "math_verify": true
+    }
+  },
+  "lm_eval_version": "0.4.13",
+  "max_length": 8192,
+  "n-samples": {
+    "aime24": {
+      "effective": 30,
+      "original": 30
+    },
+    "gsm8k": {
+      "effective": 1319,
+      "original": 1319
+    },
+    "minerva_math_algebra": {
+      "effective": 1187,
+      "original": 1187
+    },
+    "minerva_math_counting_and_prob": {
+      "effective": 474,
+      "original": 474
+    },
+    "minerva_math_geometry": {
+      "effective": 479,
+      "original": 479
+    },
+    "minerva_math_intermediate_algebra": {
+      "effective": 903,
+      "original": 903
+    },
+    "minerva_math_num_theory": {
+      "effective": 540,
+      "original": 540
+    },
+    "minerva_math_prealgebra": {
+      "effective": 871,
+      "original": 871
+    },
+    "minerva_math_precalc": {
+      "effective": 546,
+      "original": 546
+    }
+  },
+  "n-shot": {
+    "aime24": 0,
+    "gsm8k": 5,
+    "minerva_math": 4,
+    "minerva_math_algebra": 4,
+    "minerva_math_counting_and_prob": 4,
+    "minerva_math_geometry": 4,
+    "minerva_math_intermediate_algebra": 4,
+    "minerva_math_num_theory": 4,
+    "minerva_math_prealgebra": 4,
+    "minerva_math_precalc": 4
+  },
+  "pretty_env_info": "PyTorch version: 2.13.0+cu130\nIs debug build: False\nCUDA used to build PyTorch: 13.0\nROCM used to build PyTorch: N/A\n\nOS: Ubuntu 24.04.3 LTS (x86_64)\nGCC version: (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0\nClang version: Could not collect\nCMake version: version 3.28.3\nLibc version: glibc-2.39\n\nPython version: 3.12.3 (main, Aug 14 2025, 17:47:21) [GCC 13.3.0] (64-bit runtime)\nPython platform: Linux-6.8.0-139-generic-x86_64-with-glibc2.39\nIs CUDA available: True\nCUDA runtime version: 12.8.93\nCUDA_MODULE_LOADING set to: \nGPU models and configuration: GPU 0: NVIDIA A100-SXM4-80GB\nNvidia driver version: 580.173.02\ncuDNN version: Probably one of the following:\n/usr/lib/x86_64-linux-gnu/libcudnn.so.9.8.0\n/usr/lib/x86_64-linux-gnu/libcudnn_adv.so.9.8.0\n/usr/lib/x86_64-linux-gnu/libcudnn_cnn.so.9.8.0\n/usr/lib/x86_64-linux-gnu/libcudnn_engines_precompiled.so.9.8.0\n/usr/lib/x86_64-linux-gnu/libcudnn_engines_runtime_compiled.so.9.8.0\n/usr/lib/x86_64-linux-gnu/libcudnn_graph.so.9.8.0\n/usr/lib/x86_64-linux-gnu/libcudnn_heuristic.so.9.8.0\n/usr/lib/x86_64-linux-gnu/libcudnn_ops.so.9.8.0\nIs XPU available: False\nHIP runtime version: N/A\nMIOpen runtime version: N/A\nIs XNNPACK available: False\nCaching allocator config: N/A\n\nCPU:\nArchitecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           43 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  256\nOn-line CPU(s) list:                     0-254\nOff-line CPU(s) list:                    255\nVendor ID:                               AuthenticAMD\nModel name:                              AMD EPYC 7742 64-Core Processor\nCPU family:                              23\nModel:                                   49\nThread(s) per core:                      2\nCore(s) per socket:                      64\nSocket(s):                               2\nStepping:                                0\nFrequency boost:                         enabled\nCPU(s) scaling MHz:                      119%\nCPU max MHz:                             2250.0000\nCPU min MHz:                             0.0000\nBogoMIPS:                                4491.63\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local clzero irperf xsaveerptr rdpru wbnoinvd arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip rdpid overflow_recov succor smca sev sev_es ibpb_exit_to_user\nVirtualization:                          AMD-V\nL1d cache:                               4 MiB (128 instances)\nL1i cache:                               4 MiB (128 instances)\nL2 cache:                                64 MiB (128 instances)\nL3 cache:                                512 MiB (32 instances)\nNUMA node(s):                            8\nNUMA node0 CPU(s):                       0-15,128-143\nNUMA node1 CPU(s):                       16-31,144-159\nNUMA node2 CPU(s):                       32-47,160-175\nNUMA node3 CPU(s):                       48-63,176-191\nNUMA node4 CPU(s):                       64-79,192-207\nNUMA node5 CPU(s):                       80-95,208-223\nNUMA node6 CPU(s):                       96-111,224-239\nNUMA node7 CPU(s):                       112-127,240-254\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Mitigation; untrained return thunk; SMT enabled with STIBP protection\nVulnerability Spec rstack overflow:      Mitigation; Safe RET\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Retpolines; IBPB conditional; STIBP always-on; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB before exit to userspace\n\nVersions of relevant libraries:\n[pip3] mypy==2.3.1\n[pip3] mypy_extensions==1.1.0\n[pip3] nccl4py==0.6.0\n[pip3] numpy==2.1.2\n[pip3] nvidia-cublas==13.1.1.3\n[pip3] nvidia-cublas-cu12==12.8.4.1\n[pip3] nvidia-cuda-cupti==13.0.85\n[pip3] nvidia-cuda-cupti-cu12==12.8.90\n[pip3] nvidia-cuda-nvrtc==13.0.88\n[pip3] nvidia-cuda-nvrtc-cu12==12.8.93\n[pip3] nvidia-cuda-runtime==13.0.96\n[pip3] nvidia-cuda-runtime-cu12==12.8.90\n[pip3] nvidia-cudnn-cu12==9.10.2.21\n[pip3] nvidia-cudnn-cu13==9.20.0.48\n[pip3] nvidia-cudnn-frontend==1.30.0\n[pip3] nvidia-cufft==12.0.0.61\n[pip3] nvidia-cufft-cu12==11.3.3.83\n[pip3] nvidia-curand==10.4.0.35\n[pip3] nvidia-curand-cu12==10.3.9.90\n[pip3] nvidia-cusolver==12.0.4.66\n[pip3] nvidia-cusolver-cu12==11.7.3.90\n[pip3] nvidia-cusparse==12.6.3.3\n[pip3] nvidia-cusparse-cu12==12.5.8.93\n[pip3] nvidia-cusparselt-cu12==0.7.1\n[pip3] nvidia-cusparselt-cu13==0.8.1\n[pip3] nvidia-nccl-cu12==2.27.3\n[pip3] nvidia-nccl-cu13==2.29.7\n[pip3] nvidia-nvjitlink==13.4.92\n[pip3] nvidia-nvjitlink-cu12==12.8.93\n[pip3] nvidia-nvtx==13.0.85\n[pip3] nvidia-nvtx-cu12==12.8.90\n[pip3] nvtx==0.2.15\n[pip3] tokenspeed-triton==3.8.10.post20260920\n[pip3] torch==2.13.0\n[pip3] torch_c_dlpack_ext==0.1.5\n[pip3] torchaudio==2.11.0\n[pip3] torchcodec==0.16.0\n[pip3] torchvision==0.28.0\n[pip3] triton==3.7.1\n[conda] Could not collect",
+  "results": {
+    "aime24": {
+      "alias": "aime24",
+      "exact_match,none": 0.03333333333333333,
+      "exact_match_stderr,none": "N/A",
+      "name": "aime24",
+      "sample_len": 30
+    },
+    "gsm8k": {
+      "alias": "gsm8k",
+      "exact_match,flexible-extract": 0.38514025777103866,
+      "exact_match,strict-match": 0.0,
+      "exact_match_stderr,flexible-extract": "N/A",
+      "exact_match_stderr,strict-match": "N/A",
+      "name": "gsm8k",
+      "sample_len": 1319
+    },
+    "minerva_math": {
+      "alias": "minerva_math",
+      "exact_match,none": 0.0,
+      "exact_match_stderr,none": "N/A",
+      "math_verify,none": 0.4548,
+      "math_verify_stderr,none": "N/A",
+      "name": "minerva_math",
+      "sample_count": {
+        "exact_match,none": 5000,
+        "math_verify,none": 5000
+      },
+      "sample_len": 5000
+    },
+    "minerva_math_algebra": {
+      "alias": "minerva_math_algebra",
+      "exact_match,none": 0.0,
+      "exact_match_stderr,none": "N/A",
+      "math_verify,none": 0.6588037068239259,
+      "math_verify_stderr,none": "N/A",
+      "name": "minerva_math_algebra",
+      "sample_len": 1187
+    },
+    "minerva_math_counting_and_prob": {
+      "alias": "minerva_math_counting_and_prob",
+      "exact_match,none": 0.0,
+      "exact_match_stderr,none": "N/A",
+      "math_verify,none": 0.38396624472573837,
+      "math_verify_stderr,none": "N/A",
+      "name": "minerva_math_counting_and_prob",
+      "sample_len": 474
+    },
+    "minerva_math_geometry": {
+      "alias": "minerva_math_geometry",
+      "exact_match,none": 0.0,
+      "exact_match_stderr,none": "N/A",
+      "math_verify,none": 0.3945720250521921,
+      "math_verify_stderr,none": "N/A",
+      "name": "minerva_math_geometry",
+      "sample_len": 479
+    },
+    "minerva_math_intermediate_algebra": {
+      "alias": "minerva_math_intermediate_algebra",
+      "exact_match,none": 0.0,
+      "exact_match_stderr,none": "N/A",
+      "math_verify,none": 0.24916943521594684,
+      "math_verify_stderr,none": "N/A",
+      "name": "minerva_math_intermediate_algebra",
+      "sample_len": 903
+    },
+    "minerva_math_num_theory": {
+      "alias": "minerva_math_num_theory",
+      "exact_match,none": 0.0,
+      "exact_match_stderr,none": "N/A",
+      "math_verify,none": 0.3685185185185185,
+      "math_verify_stderr,none": "N/A",
+      "name": "minerva_math_num_theory",
+      "sample_len": 540
+    },
+    "minerva_math_prealgebra": {
+      "alias": "minerva_math_prealgebra",
+      "exact_match,none": 0.0,
+      "exact_match_stderr,none": "N/A",
+      "math_verify,none": 0.6107921928817451,
+      "math_verify_stderr,none": "N/A",
+      "name": "minerva_math_prealgebra",
+      "sample_len": 871
+    },
+    "minerva_math_precalc": {
+      "alias": "minerva_math_precalc",
+      "exact_match,none": 0.0,
+      "exact_match_stderr,none": "N/A",
+      "math_verify,none": 0.3021978021978022,
+      "math_verify_stderr,none": "N/A",
+      "name": "minerva_math_precalc",
+      "sample_len": 546
+    }
+  },
+  "tokenizer_bos_token": [
+    null,
+    "None"
+  ],
+  "tokenizer_eos_token": [
+    "<|im_end|>",
+    "151645"
+  ],
+  "tokenizer_pad_token": [
+    "<|endoftext|>",
+    "151643"
+  ],
+  "transformers_version": "5.17.0",
+  "upper_git_hash": null,
+  "versions": {
+    "aime24": 0.0,
+    "gsm8k": 3.0,
+    "minerva_math": "1.0",
+    "minerva_math_algebra": 3.1,
+    "minerva_math_counting_and_prob": 3.1,
+    "minerva_math_geometry": 3.1,
+    "minerva_math_intermediate_algebra": 3.1,
+    "minerva_math_num_theory": 3.1,
+    "minerva_math_prealgebra": 3.1,
+    "minerva_math_precalc": 3.1
+  }
+}

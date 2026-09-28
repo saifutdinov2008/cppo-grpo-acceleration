@@ -5,15 +5,31 @@
 \toprule
 Method & P & k & m & Steps & Questions & Wall clock (s) & Rollout (s) & Update (s) & Peak mem (GiB) & Questions/s & Throughput gain \\
 \midrule
-smoke-grpo & 0.00\% & 4 & 1x & 2 & 2 & 553.0 & 21.1 & 526.1 & 7.47 & 0.0036 & 1.00x \\
-smoke-cppo & 50.00\% & 2 & 2x & 2 & 4 & 550.9 & 28.7 & 516.4 & 6.99 & 0.0073 & 2.01x \\
+grpo-baseline & 0.00\% & 8 & 1x & 510 & 8160 & 11401.0 & 5331.3 & 5260.3 & 48.05 & 0.7157 & 1.00x \\
+cppo-p50 & 50.00\% & 4 & 2x & 255 & 8160 & 7559.4 & 4372.5 & 2751.9 & 47.78 & 1.0795 & 1.51x \\
+cppo-p75 & 75.00\% & 2 & 4x & 127 & 8128 & 5916.9 & 4252.5 & 1428.0 & 47.90 & 1.3737 & 1.92x \\
+cppo-p875 & 87.50\% & 1 & 8x & 63 & 8064 & 5544.7 & 4672.0 & 739.6 & 47.76 & 1.4544 & 2.03x \\
+cppo-p75-no-allocation & 75.00\% & 2 & 1x & 510 & 8160 & 6465.0 & 4787.2 & 1439.2 & 32.96 & 1.2622 & 1.76x \\
 \bottomrule
 \end{tabular}
 }
 
 \subsection*{Downstream accuracy (lm-evaluation-harness, \% exact match)}
 
-\emph{No evaluation results available.}
+\resizebox{\ifdim\width>\textwidth\textwidth\else\width\fi}{!}{%
+\begin{tabular}{lrrrrr}
+\toprule
+Method & P & aime24 & gsm8k & minerva\_math & Final reward \\
+\midrule
+Qwen3-0.6B (untrained) & -- & 3.33 & 36.85 & 46.58 & -- \\
+grpo-baseline & 0.00\% & 0.00 & 39.12 & 44.56 & 0.859 \\
+cppo-p50 & 50.00\% & 3.33 & 38.51 & 45.48 & 0.750 \\
+cppo-p75 & 75.00\% & 0.00 & 38.13 & 45.80 & 0.758 \\
+cppo-p875 & 87.50\% & 3.33 & 38.13 & 46.12 & 0.654 \\
+cppo-p75-no-allocation & 75.00\% & 0.00 & 39.35 & 45.12 & 0.836 \\
+\bottomrule
+\end{tabular}
+}
 
 \subsection*{Update-stage micro-benchmark}
 
@@ -22,14 +38,14 @@ smoke-cppo & 50.00\% & 2 & 2x & 2 & 4 & 550.9 & 28.7 & 516.4 & 6.99 & 0.0073 & 2
 \toprule
 P & k & Completions/step & Tokens/step & Step time (s) & Speedup (pruning only) & Speedup (with allocation) \\
 \midrule
-0.00\% & 8 & 8 & 1024 & 4.4768 $\pm$ 0.0016 & 1.00x & 1.00x \\
-12.50\% & 7 & 7 & 896 & 3.9283 $\pm$ 0.0027 & 1.14x & 1.13x \\
-25.00\% & 6 & 6 & 768 & 3.4326 $\pm$ 0.0017 & 1.30x & 1.30x \\
-37.50\% & 5 & 5 & 640 & 2.9138 $\pm$ 0.0011 & 1.54x & 1.53x \\
-50.00\% & 4 & 4 & 512 & 2.4255 $\pm$ 0.0019 & 1.85x & 2.00x \\
-62.50\% & 3 & 3 & 384 & 1.8822 $\pm$ 0.0031 & 2.38x & 2.61x \\
-75.00\% & 2 & 2 & 256 & 1.3869 $\pm$ 0.0060 & 3.23x & 4.01x \\
-87.50\% & 1 & 1 & 128 & 0.8302 $\pm$ 0.0019 & 5.39x & 8.02x \\
+0.00\% & 8 & 32 & 16384 & 0.7083 $\pm$ 0.0006 & 1.00x & 0.99x \\
+12.50\% & 7 & 28 & 14336 & 0.6326 $\pm$ 0.0005 & 1.12x & 1.13x \\
+25.00\% & 6 & 24 & 12288 & 0.5467 $\pm$ 0.0011 & 1.30x & 1.30x \\
+37.50\% & 5 & 20 & 10240 & 0.4602 $\pm$ 0.0011 & 1.54x & 1.53x \\
+50.00\% & 4 & 16 & 8192 & 0.3816 $\pm$ 0.0006 & 1.86x & 1.99x \\
+62.50\% & 3 & 12 & 6144 & 0.2907 $\pm$ 0.0010 & 2.44x & 2.60x \\
+75.00\% & 2 & 8 & 4096 & 0.2120 $\pm$ 0.0010 & 3.34x & 3.98x \\
+87.50\% & 1 & 4 & 2048 & 0.1287 $\pm$ 0.0003 & 5.50x & 7.96x \\
 \bottomrule
 \end{tabular}
 }

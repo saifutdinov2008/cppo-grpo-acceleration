@@ -9,14 +9,20 @@ built on [TRL](https://github.com/huggingface/trl), evaluated with
 > [CPPO](https://arxiv.org/pdf/2503.22342), and how much does it actually
 > accelerate RL training?
 >
-> **Short answer:** CPPO's accuracy cost is close to zero in the `P ∈ [0.5, 0.875]`
-> band, because group-standardised rewards concentrate almost all of the
-> learning signal in a small minority of completions. Its *speedup*, however,
-> is bounded by Amdahl's law on the rollout stage, which completion pruning
-> cannot touch: `S(P) = 1 / ((1-f) + f(1-P))` where `f` is the update stage's
-> share of training time. Published 8× figures describe configurations where
-> `f ≈ 0.9`; in a modern KL-free setup with a vLLM rollout, `f` — and therefore
-> the payoff — is smaller. Details in [Analysis](#7-analysis).
+> **Short answer, measured on 1× A100 over 8,192 DAPO-Math problems:**
+> CPPO **halves wall-clock training time** (2.03× at P = 0.875) and costs
+> **nothing measurable in accuracy** — at a matched optimiser-step count,
+> pruning 75% of completions scored *higher* than the baseline on
+> minerva_math (+0.56 pp).
+>
+> The interesting part is *why* it beat the prediction. A cost model based on
+> Amdahl's law, `S(P) = 1/((1-f) + f(1-P))` with a measured `f = 0.46`, caps
+> the speedup at 1.86×. The measurement reached **2.06×** — because the model
+> assumes the rollout is untouched, and it is not: dynamic allocation enlarges
+> the generation batch, which raises vLLM throughput by a further 12-20%.
+> The bound turns out to be a **lower** bound.
+> See [Results](#8-results) for the falsification and
+> [Analysis](#7-analysis) for the model.
 
 ---
 
@@ -425,18 +431,24 @@ This one equation explains the whole spread of published numbers:
   backward, so `f` is smaller. The honest reading: the configuration that
   flatters CPPO's *relative* numbers is not the one that is best in absolute
   terms.
-- **The rollout is not reducible by this method, even in principle.** Nothing
-  in the rollout depends on advantages — they do not exist until sampling has
-  finished. The rollout is instead accelerated by vLLM, sleep mode and the
-  enlarged generation batch (§5.6); cutting it *further* needs an orthogonal
-  technique that reduces tokens generated — speculative or truncated sampling,
-  early termination of degenerate groups, or cross-step completion reuse.
+- **The rollout's *work* is irreducible by this method — but its *time* is
+  not.** Nothing in the rollout depends on advantages, which do not exist until
+  sampling has finished, so pruning cannot generate fewer tokens. But dynamic
+  allocation enlarges the generation batch by `m`, and vLLM's continuous
+  batching converts that into throughput: §8.2 measures the rollout running
+  **12-20% faster** at the same token count. This is why the measured speedup
+  *exceeds* the ceiling above — the "invariant" term is not invariant, and the
+  formula is therefore a lower bound rather than an upper one. Cutting rollout
+  work itself still needs an orthogonal technique: speculative or truncated
+  sampling, early termination of degenerate groups, or cross-step reuse.
 
 ![End-to-end speedup ceiling as a function of the update stage share](report/figures/amdahl_ceiling.png)
 
 Because `f` is measured directly by the profiling mixin — both stages timed by
 the same code in both runs, and additive by construction — this equation is a
-falsifiable prediction that the tables below can be checked against.
+falsifiable prediction. **§8.2 checks it, and it fails in CPPO's favour.** That
+is the most useful thing the model did: not confirm a number, but be precise
+enough that reality could contradict it and say why.
 
 ### 7.2 Why accuracy survives
 
@@ -507,153 +519,155 @@ fewer, fatter optimiser steps.
 
 ## 8. Results
 
-### 8.1 Update-stage scaling — measured on Qwen3-0.6B
+All numbers below were measured on **1× NVIDIA A100-SXM4-80GB**. Every run
+consumed the same 8,192 DAPO-Math problems in the same order, with identical
+data, rewards, seeds and instrumentation. Raw artefacts are in [`results/`](results/) and the tables are regenerated from
+them by `python -m cppo.report`. The `eval.json` files carry aggregate metrics,
+task configs and versions; lm_eval's per-document dumps (~46 MB each) are
+stripped, and `cppo.evaluate` now passes `log_samples=False` so they are not
+produced again.
 
-This is the measurement that isolates exactly what CPPO changes. No dataset,
-no generation, no reward model: a synthetic rollout of one group of `G = 8`
-completions is pruned to `k`, and the resulting forward + backward +
-optimiser step is timed.
+### 8.1 Training performance
 
-*Hardware: Apple M1 Pro (14-core GPU, 16 GB unified memory), PyTorch MPS
-backend, bfloat16, gradient checkpointing on, completion length 128 tokens,
-3 timed steps after 1 warm-up. Reproduce with*
-`bash scripts/benchmark_update_stage.sh mps`. *Raw data:*
-[`results/update_stage_mps_qwen3_0.6b.json`](results/update_stage_mps_qwen3_0.6b.json).
+| Method | P | k | m | Steps | Wall clock | Rollout | Update | Peak mem | Questions/s | Speedup |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| grpo-baseline | 0% | 8 | 1× | 510 | 11401 s | 5331 s | 5260 s | 48.05 GiB | 0.716 | 1.00× |
+| cppo-p50 | 50% | 4 | 2× | 255 | 7559 s | 4373 s | 2752 s | 47.78 GiB | 1.080 | **1.51×** |
+| cppo-p75 | 75% | 2 | 4× | 127 | 5917 s | 4253 s | 1428 s | 47.90 GiB | 1.374 | **1.92×** |
+| cppo-p875 | 87.5% | 1 | 8× | 63 | 5545 s | 4672 s | 740 s | 47.76 GiB | 1.454 | **2.03×** |
+| cppo-p75-no-allocation | 75% | 2 | 1× | 510 | 6465 s | 4787 s | 1439 s | **32.96 GiB** | 1.262 | 1.76× |
 
-| P | k | Completions/step | Tokens/step | Step time (s) | Speedup (pruning only) | Speedup (with allocation) |
-|---|---|---|---|---|---|---|
-| 0.00% | 8 | 8 | 1024 | 4.4768 +/- 0.0016 | 1.00x | 1.00x |
-| 12.50% | 7 | 7 | 896 | 3.9283 +/- 0.0027 | 1.14x | 1.13x |
-| 25.00% | 6 | 6 | 768 | 3.4326 +/- 0.0017 | 1.30x | 1.30x |
-| 37.50% | 5 | 5 | 640 | 2.9138 +/- 0.0011 | 1.54x | 1.53x |
-| 50.00% | 4 | 4 | 512 | 2.4255 +/- 0.0019 | 1.85x | 2.00x |
-| 62.50% | 3 | 3 | 384 | 1.8822 +/- 0.0031 | 2.38x | 2.61x |
-| 75.00% | 2 | 2 | 256 | 1.3869 +/- 0.0060 | 3.23x | 4.01x |
-| 87.50% | 1 | 1 | 128 | 0.8302 +/- 0.0019 | 5.39x | 8.02x |
+**CPPO cut wall-clock training time by half at P = 0.875** — 3.17 h down to
+1.54 h for the same 8,192 problems.
 
-![Update-stage step time against retained completions](report/figures/update_stage_scaling.png)
+### 8.2 The cost model was right about the update stage and wrong about the rollout
 
-**The update stage is almost perfectly linear in `k`.** A least-squares fit
-over the eight points gives
+§7.1 predicted `S(P) = 1/((1−f) + f(1−P))`. From the baseline,
+`f = 5260/11401 = 0.461`, which puts the ceiling at `1/(1−f) = 1.86×`. Against
+that prediction:
+
+| P | Predicted | **Measured** | Update stage | Rollout stage |
+|---:|---:|---:|---:|---:|
+| 0.50 | 1.30× | **1.51×** | 0.523× (theory 0.500) | 0.82× (theory 1.00) |
+| 0.75 | 1.53× | **1.93×** | 0.271× (theory 0.250) | 0.80× (theory 1.00) |
+| 0.875 | 1.68× | **2.06×** | 0.141× (theory 0.125) | 0.88× (theory 1.00) |
+
+Two things happened, and only one of them was predicted.
+
+**The update stage scaled almost exactly as modelled.** Measured 0.523 / 0.271
+/ 0.141 against a theoretical `k/G` of 0.500 / 0.250 / 0.125. The small excess
+is the batch-independent cost the micro-benchmark isolated — on A100 the fit is
 
 ```
-T(k) = 0.3360 s  +  0.5163 s × k          R² = 0.99982
+T(c) = 0.0447 s + 0.0209 s × c        R² = 0.99978
 ```
 
-The intercept is the batch-independent cost — the AdamW update over all 0.6B
-parameters, kernel launches, synchronisation — and is **7.5% of the baseline
-step**. The slope is the per-completion cost that CPPO removes. Two things
-follow directly:
+with the intercept at **6.3%** of the baseline step, giving an update-stage
+ceiling of 15.8×.
 
-1. **Pruning alone cannot reach `G/k`.** At `P = 0.75` the measured speedup is
-   **3.23×**, not 4×, because the fixed cost is now amortised over a quarter of
-   the work. The ceiling for the update stage as `k → 0` is
-   `T(8)/0.3360 = 13.3×`.
-2. **Dynamic allocation recovers the loss, and it is the larger effect at high
-   pruning rates.** Refilling the batch to `m·k` completions from `m = ⌊G/k⌋`
-   questions brings the step back to full width, so the fixed cost is amortised
-   as well as the baseline's while `m`× more questions are covered: **4.01× at
-   `P = 0.75`** and **8.02× at `P = 0.875`**, against 3.23× and 5.39× for
-   pruning alone.
+**The rollout was supposed to be invariant. It was not.** Generation dropped to
+**0.80–0.88×** of the baseline. Dynamic allocation enlarges the generation
+batch by `m`, which gives vLLM more sequences to batch per decoding step — and
+continuous batching converts that directly into throughput. §5.6 predicted this
+qualitatively; here it is quantitatively.
 
-![Pruning-only speedup versus the gain with dynamic allocation](report/figures/throughput_gain.png)
+The consequence is that **the measured 2.06× at P = 0.875 exceeds the Amdahl
+ceiling of 1.86×**. That is not a paradox — it falsifies the model's premise.
+Amdahl's law bounds what you get by accelerating *one* part while the rest is
+held fixed. CPPO's allocation strategy does not hold the rollout fixed, so the
+bound does not apply as stated. The correct reading: **the cost model is a
+lower bound on CPPO's benefit, not an upper one**, precisely because allocation
+touches both stages.
 
-Point 2 reproduces, on our own hardware and model, the mechanism behind the
-paper's component ablation (1.23× for pruning alone → 1.65× once allocation is
-added). It is also why `cppo/geometry.py` exists: allocation is not a detail,
-it is roughly half of CPPO's benefit.
+### 8.3 Memory: the ablation proves the claim exactly
 
-Note the two columns **cross** at `k = 3`, where allocation is 2.61× against
-2.38× for pruning alone but short of the naive `m = 2`. `k` does not divide
-`G`, so the refilled batch holds 6 of 8 slots. Pruning rates that make `k` a
-divisor of `G` — `P ∈ {0.5, 0.75, 0.875}` for `G = 8` — are the ones worth
-configuring.
-
-*Caveat on memory:* the MPS backend exposes only an instantaneous allocation
-figure, not a high-water mark, so this run's memory column is not a
-trustworthy activation peak and is omitted. Peak-memory numbers require the
-CUDA path (`torch.cuda.max_memory_allocated`), which `cppo/profiling.py`
-already uses when a CUDA device is present.
-
-### 8.2 End-to-end pipeline validation — real Qwen3-0.6B on real DAPO-Math-17k
-
-**Read this as a plumbing check, not a performance claim.** It runs the whole
-pipeline — dataset, chat template, rollout, `math_verify` rewards,
-group-relative advantages, pruning, loss, optimiser step, profiling — on the
-actual model and the actual training corpus, and confirms that CPPO changes
-what it is supposed to change and nothing else.
-
-*Hardware: Apple M1 Pro, CPU (float32), `configs/smoke_cpu.yaml`: `G = 4`,
-32-token completions, 2 optimiser steps. Reproduce with*
-`bash scripts/smoke_test.sh`.
-
-| Method | P | k | m | Steps | Questions | Wall clock (s) | Rollout (s) | Update (s) | Peak mem (GiB) | Questions/s | Throughput gain |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| smoke-grpo | 0.00% | 4 | 1x | 2 | 2 | 553.0 | 21.1 | 526.1 | 7.47 | 0.0036 | 1.00x |
-| smoke-cppo | 50.00% | 2 | 2x | 2 | 4 | 550.9 | 28.7 | 516.4 | 6.99 | 0.0073 | 2.01x |
-
-Three things are confirmed and one is not.
-
-**Confirmed — dynamic allocation works as designed.** CPPO consumed **4
-questions to GRPO's 2 in the same wall clock**, a **2.01× throughput gain**
-against a predicted `m = ⌊G/k⌋ = 2`. Both runs did the same number of
-optimiser steps on the same update-stage micro-batch width; CPPO simply
-covered twice the data per step. Update time was essentially unchanged
-(516 s vs 526 s) while rollout grew (28.7 s vs 21.1 s), exactly the trade the
-method makes.
-
-**Confirmed — pruning retains what it claims.** The CPPO run logged
-`cppo/retention = 0.5` throughout, i.e. `k = 2` of `G = 4` completions reached
-the policy backward pass.
-
-**Confirmed — the stage split is measured, not assumed.** Rollout and update
-times partition the training step additively, from the same code in both runs.
-
-**Not confirmed — anything about learning.** With 32-token completions
-Qwen3-0.6B emits no `\boxed{}` answer, so every reward was 0, every group had
-zero variance (`cppo/frac_degenerate_groups = 1`), and every advantage was
-therefore 0. The gradient is zero and the model does not move. This is a
-property of the deliberately tiny configuration, not of the pipeline — the
-unit tests in `tests/test_trainer_smoke.py` use a reward that varies within a
-group and assert that CPPO back-propagates through exactly the retained
-subset.
-
-**The evaluation pipeline was exercised too.** Running `cppo.evaluate` against
-the untrained Qwen3-0.6B on five GSM8K problems (CPU, float32, 256 generated
-tokens) returns `exact_match,flexible-extract = 0.20` and
-`exact_match,strict-match = 0.00` —
-[`results/eval_smoke_gsm8k.json`](results/eval_smoke_gsm8k.json). Five problems
-say nothing about accuracy, but the *split* between the two filters confirms a
-design decision: a policy prompted with a chat template and a `\boxed{}`
-convention never emits GSM8K's `#### N` marker, so `strict-match` scores it
-zero regardless of correctness. That is why `cppo/evaluate.py` reports
-`flexible-extract` as the headline metric for GSM8K.
-
-```bash
-python -m cppo.evaluate --model-path Qwen/Qwen3-0.6B --tasks gsm8k \
-  --limit 5 --max-gen-toks 256 --dtype float32 --device cpu --prompt-style boxed
+```
+with allocation:     48.05 → 47.78 / 47.90 / 47.76 GiB   (unchanged)
+without allocation:  48.05 → 32.96 GiB                   (−31%)
 ```
 
-**A note on `f` for this run.** The update stage is 96% of the measured step
-time here, which would imply a very high Amdahl ceiling. Do not generalise it:
-on CPU a 32-token rollout is cheap while a float32 backward pass is
-extravagant. On the reference setup — A100, bf16, vLLM rollout, 1024-token
-completions — the split is far less update-heavy, which is precisely why §7.1
-insists that `f` must be measured per configuration rather than assumed.
+§7.3 argued that CPPO buys throughput *at constant memory*, and that only the
+no-allocation ablation lowers the peak. Both halves confirmed: the three
+allocated runs sit within 0.3 GiB of the baseline, and removing allocation cuts
+31% of peak memory — at the cost of leaving three quarters of each micro-batch
+empty (still 1.76×, but 1.92× was available).
 
-### 8.3 What is not measured here
+### 8.4 Accuracy: the result that contradicts expectations
 
-The full study — GRPO baseline against three CPPO pruning rates plus the
-no-allocation ablation, one epoch over 8,192 DAPO-Math problems each, followed
-by `lm_eval` on all three benchmarks — needs a CUDA GPU and roughly 12–18
-GPU-hours. It has **not** been run: this machine has no CUDA device. Every
-script needed to run it is in `scripts/`, `bash scripts/run_all.sh` drives the
-whole sweep, and `python -m cppo.report` regenerates both this section and
-`report/generated_tables.tex` from the resulting JSON artefacts.
+| Model | Steps | gsm8k | Δ | minerva_math | Δ | aime24 |
+|---|---:|---:|---:|---:|---:|---:|
+| **Qwen3-0.6B (untrained)** | — | 36.85 | — | **46.58** | — | 3.33 |
+| grpo-baseline | 510 | **39.12** | +2.27 | 44.56 | **−2.02** | 0.00 |
+| cppo-p50 | 255 | 38.51 | +1.67 | 45.48 | −1.10 | 3.33 |
+| cppo-p75 | 127 | 38.13 | +1.29 | 45.80 | −0.78 | 0.00 |
+| cppo-p875 | 63 | 38.13 | +1.29 | 46.12 | −0.46 | 3.33 |
+| cppo-p75-no-allocation | 510 | **39.35** | +2.50 | 45.12 | −1.46 | 0.00 |
 
-The numbers quoted from the CPPO paper in §7.4 are labelled as such throughout
-and are not reproduced here. Nothing in this repository extrapolates a measured
-number onto hardware it was not measured on.
+**One epoch of GRPO improved gsm8k by ~2 points and degraded minerva_math by
+~2 points.** The untrained model is the best minerva_math scorer in the table.
+This is not a CPPO result — the GRPO baseline shows it too, and more strongly
+than any CPPO run.
+
+The training logs explain it. Reward rose from 0.61 to 0.74 over the epoch, but
+the rise was **entirely in the format component** (0.456 → 0.576) while
+accuracy stayed flat (0.158 → 0.181). Mean completion length fell from 799 to
+755 tokens. The policy learned to emit exactly one `\boxed{}` and to stop
+sooner. On gsm8k, where the flexible-extract filter takes the last number, that
+helps. On minerva_math, where 4-shot prompting already produced parseable
+answers, shorter reasoning on competition-level problems costs more than
+cleaner formatting gains.
+
+**Why CPPO degrades it less, and why that is mostly not about pruning.** The
+minerva_math loss tracks the optimiser-step count almost perfectly:
+
+```
+510 steps → −2.02      255 → −1.10      127 → −0.78      63 → −0.46
+```
+
+CPPO at P = 0.875 takes eight times fewer steps for the same data, so it simply
+moves the model less. Attributing this to pruning would be wrong, and the
+monotone trend in `P` is confounded with the step count.
+
+**The ablation disentangles it.** `cppo-p75-no-allocation` runs the **same 510
+optimiser steps as the baseline** on the same data, but prunes to `k = 2`. At
+matched step count:
+
+| | minerva_math | gsm8k |
+|---|---:|---:|
+| grpo-baseline | 44.56 | 39.12 |
+| cppo-p75-no-allocation | **45.12** | **39.35** |
+| difference | **+0.56** | **+0.23** |
+
+So pruning itself is **neutral to slightly positive** — directionally
+consistent with the paper's claim, but the effect is under one point on a
+single seed and should not be called significant. What is solid is the negative
+result: **pruning 75% of completions did not hurt accuracy.** That is the
+hypothesis CPPO actually needs, and it holds.
+
+`aime24` is 0.00 or 3.33 throughout — zero or one problem out of thirty. Noise.
+
+### 8.5 Update-stage micro-benchmark on A100
+
+| P | k | Completions/step | Step time | Speedup (pruning only) | Speedup (with allocation) |
+|---:|---:|---:|---:|---:|---:|
+| 0% | 8 | 32 | 0.7083 s | 1.00× | 1.00× |
+| 50% | 4 | 16 | 0.3816 s | 1.86× | 1.99× |
+| 75% | 2 | 8 | 0.2120 s | 3.34× | 3.98× |
+| 87.5% | 1 | 4 | 0.1287 s | 5.50× | 7.96× |
+
+Reproduces the Apple-MPS run closely (3.23×/4.01× and 5.39×/8.02× there), on
+different hardware and a 5.5× faster device — the ratio between pruning alone
+and pruning with allocation is a property of the method, not of the machine.
+
+### 8.6 Summary
+
+| Question the task asks | Answer |
+|---|---|
+| **Training time** | 1.51× / 1.92× / **2.03×** at P = 0.50 / 0.75 / 0.875 |
+| **Maximum memory** | unchanged with allocation; **−31%** without it |
+| **Final model quality** | no degradation from pruning; at matched steps, +0.56 pp on minerva_math |
+| **How accurate is CPPO?** | As accurate as GRPO. Discarding 75% of completions costs nothing measurable. |
+| **How does it influence acceleration?** | Halves wall-clock time. The gain exceeds the naive Amdahl bound because allocation also accelerates the rollout. |
 
 ---
 
@@ -763,7 +777,23 @@ The test suite covers:
 - **`aime24` has 30 problems.** One problem is 3.3 points. Differences there
   are not significant without multiple seeds.
 - **Single seed per configuration.** GRPO is noisy; read the accuracy column as
-  "no regression" evidence rather than a precise ranking.
+  "no regression" evidence rather than a precise ranking. The +0.56 pp from the
+  step-matched ablation is well inside what a second seed could move.
+- **Optimiser-step count is confounded with the pruning rate** in the main
+  sweep: CPPO at P = 0.875 takes 8× fewer steps for the same data, so "CPPO
+  preserved accuracy better" and "CPPO changed the model less" cannot be
+  separated there. Only the `no_allocation` ablation, which matches the
+  baseline's 510 steps, isolates pruning — and it is one configuration on one
+  seed.
+- **One epoch degraded minerva_math** for every configuration including the
+  GRPO baseline (§8.4). The reward rose almost entirely through its format
+  component, so the policy learned presentation rather than reasoning. A
+  stronger study would need more epochs, a harder-to-game reward, or a model
+  with real headroom on competition mathematics.
+- **34% of completions were truncated** at the 1024-token cap and masked out of
+  the loss, so the effective batch was ~66% of nominal. The setting is
+  identical across all runs, so the comparison holds, but a 2048-token budget
+  would have used the rollout more efficiently.
 - **Gradient checkpointing is on throughout**, which inflates the update stage
   by roughly a third and so raises the measured `f`. This *flatters* CPPO — the
   same sweep without checkpointing would show a lower end-to-end speedup. It is

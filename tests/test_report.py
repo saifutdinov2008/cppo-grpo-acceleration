@@ -235,3 +235,33 @@ def test_baseline_only_tasks_still_get_a_column() -> None:
     summaries = [summarize_run(_profile("grpo", 0.0, 100.0, 1.0), {"gsm8k": 41.0})]
     rendered = render_tables(summaries, baseline_accuracies={"gsm8k": 12.5, "aime24": 0.0})
     assert "aime24" in rendered
+
+
+def test_latex_escapes_every_special_character() -> None:
+    """Task ids carry underscores; unescaped they abort the LaTeX build.
+
+    `minerva_math` reaching the document as-is fails with "Missing $ inserted",
+    which only surfaces once the accuracy table is actually populated.
+    """
+    summaries = [
+        summarize_run(
+            _profile("grpo", 0.0, 100.0, 1.0),
+            {"minerva_math": 44.56, "gsm8k": 39.12},
+        )
+    ]
+    rendered = render_tables(summaries, latex=True)
+
+    assert r"minerva\_math" in rendered
+    # No bare underscore anywhere, escaped or not, outside of the escape itself.
+    assert "_" not in rendered.replace(r"\_", "")
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("a_b", r"a\_b"), ("50%", r"50\%"), ("a&b", r"a\&b"), ("#1", r"\#1"), ("$x", r"\$x")],
+)
+def test_latex_cell_escapes(raw: str, expected: str) -> None:
+    """Each LaTeX special character is escaped individually."""
+    from cppo.report import _latex_cell  # pylint: disable=import-outside-toplevel
+
+    assert _latex_cell(raw) == expected

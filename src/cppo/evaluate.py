@@ -226,6 +226,9 @@ def run_evaluation(
         torch_random_seed=seed,
         fewshot_random_seed=seed,
         bootstrap_iters=0,
+        # Per-document dumps are ~46 MB per task set and would dominate the
+        # repository; the aggregate metrics are what the report needs.
+        log_samples=False,
     )
     if results is None:  # pragma: no cover - only on non-zero ranks
         return {}

@@ -146,6 +146,23 @@ def _fmt(value: float | None, digits: int = 2, dash: str = "--") -> str:
     return dash if value is None else f"{value:.{digits}f}"
 
 
+#: Characters LaTeX treats specially in text mode. Task ids such as
+#: ``minerva_math`` carry underscores, which abort the build with
+#: "Missing $ inserted" if they reach the document unescaped.
+_LATEX_ESCAPES = (
+    ("\\", r"\textbackslash{}"),
+    ("&", r"\&"),
+    ("%", r"\%"),
+    ("$", r"\$"),
+    ("#", r"\#"),
+    ("_", r"\_"),
+    ("{", r"\{"),
+    ("}", r"\}"),
+    ("~", r"\textasciitilde{}"),
+    ("^", r"\textasciicircum{}"),
+)
+
+
 def _latex_cell(text: str) -> str:
     """Escape a table cell for LaTeX.
 
@@ -153,9 +170,12 @@ def _latex_cell(text: str) -> str:
         text: The already-formatted cell contents.
 
     Returns:
-        The cell with ``%`` escaped and ``+/-`` typeset as a proper symbol.
+        The cell with every LaTeX special character escaped and ``+/-``
+        typeset as a proper symbol.
     """
-    return text.replace("%", r"\%").replace("+/-", r"$\pm$")
+    for char, replacement in _LATEX_ESCAPES:
+        text = text.replace(char, replacement)
+    return text.replace("+/-", r"$\pm$")
 
 
 def _table(headers: Sequence[str], rows: Sequence[Sequence[str]], latex: bool) -> str:

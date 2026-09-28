@@ -1,0 +1,112 @@
+{
+  "completion_length": 512,
+  "device": "cuda",
+  "dtype": "torch.bfloat16",
+  "environment": {
+    "cuda_available": true,
+    "cuda_device_count": 1,
+    "cuda_devices": [
+      "NVIDIA A100-SXM4-80GB"
+    ],
+    "platform": "Linux-6.8.0-139-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3",
+    "torch": "2.13.0+cu130",
+    "world_size": 1
+  },
+  "gradient_checkpointing": false,
+  "model": "Qwen/Qwen3-0.6B",
+  "num_generations": 8,
+  "questions": 4,
+  "results": [
+    {
+      "completions_per_step": 32,
+      "mean_step_seconds": 0.7083180819638073,
+      "num_retained": 8,
+      "peak_memory_gib": 52.68862962722778,
+      "peak_reserved_gib": 55.265625,
+      "pruning_rate": 0.0,
+      "speedup": 1.0,
+      "stdev_step_seconds": 0.0006024989402276221,
+      "tokens_per_step": 16384
+    },
+    {
+      "completions_per_step": 28,
+      "mean_step_seconds": 0.6326314569916576,
+      "num_retained": 7,
+      "peak_memory_gib": 46.520909786224365,
+      "peak_reserved_gib": 46.970703125,
+      "pruning_rate": 0.125,
+      "speedup": 1.1196377830025417,
+      "stdev_step_seconds": 0.0005328915513145268,
+      "tokens_per_step": 14336
+    },
+    {
+      "completions_per_step": 24,
+      "mean_step_seconds": 0.5466589708346874,
+      "num_retained": 6,
+      "peak_memory_gib": 40.35416650772095,
+      "peak_reserved_gib": 44.498046875,
+      "pruning_rate": 0.25,
+      "speedup": 1.2957220493103487,
+      "stdev_step_seconds": 0.0010884456004484136,
+      "tokens_per_step": 12288
+    },
+    {
+      "completions_per_step": 20,
+      "mean_step_seconds": 0.46018139882944525,
+      "num_retained": 5,
+      "peak_memory_gib": 34.18682527542114,
+      "peak_reserved_gib": 37.767578125,
+      "pruning_rate": 0.375,
+      "speedup": 1.5392149351658773,
+      "stdev_step_seconds": 0.0010691366961073604,
+      "tokens_per_step": 10240
+    },
+    {
+      "completions_per_step": 16,
+      "mean_step_seconds": 0.3815739167388529,
+      "num_retained": 4,
+      "peak_memory_gib": 28.019615650177002,
+      "peak_reserved_gib": 32.876953125,
+      "pruning_rate": 0.5,
+      "speedup": 1.8563063429950752,
+      "stdev_step_seconds": 0.0005889174222147845,
+      "tokens_per_step": 8192
+    },
+    {
+      "completions_per_step": 12,
+      "mean_step_seconds": 0.2906877884175628,
+      "num_retained": 3,
+      "peak_memory_gib": 21.85289430618286,
+      "peak_reserved_gib": 25.037109375,
+      "pruning_rate": 0.625,
+      "speedup": 2.436697068768273,
+      "stdev_step_seconds": 0.0009590926055369876,
+      "tokens_per_step": 6144
+    },
+    {
+      "completions_per_step": 8,
+      "mean_step_seconds": 0.21195886782370507,
+      "num_retained": 2,
+      "peak_memory_gib": 15.682310581207275,
+      "peak_reserved_gib": 17.94140625,
+      "pruning_rate": 0.75,
+      "speedup": 3.341771397613544,
+      "stdev_step_seconds": 0.0009890583706057198,
+      "tokens_per_step": 4096
+    },
+    {
+      "completions_per_step": 4,
+      "mean_step_seconds": 0.12870464706793427,
+      "num_retained": 1,
+      "peak_memory_gib": 9.514590740203857,
+      "peak_reserved_gib": 17.52734375,
+      "pruning_rate": 0.875,
+      "speedup": 5.5034382837003175,
+      "stdev_step_seconds": 0.00033268835367178363,
+      "tokens_per_step": 2048
+    }
+  ],
+  "steps": 5,
+  "warmup": 2
+}
